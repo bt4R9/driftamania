@@ -400,7 +400,10 @@ export function collideCars(a, b, moveBoth) {
   if (d >= minD || d < 1e-6) return 0;
 
   const nx = dx / d, nz = dz / d;
-  const overlap = minD - d;
+  // SOFT separation: only part of the overlap resolves per frame, so contact
+  // persists — cars lean on and grind against each other instead of popping
+  // apart the instant they touch.
+  const overlap = (minD - d) * 0.55;
   if (moveBoth) {
     a.x -= nx * overlap / 2; a.z -= nz * overlap / 2;
     b.x += nx * overlap / 2; b.z += nz * overlap / 2;
@@ -408,23 +411,36 @@ export function collideCars(a, b, moveBoth) {
     a.x -= nx * overlap; a.z -= nz * overlap;
   }
 
+  // Momentum sharing while in contact: the faster car DRAGS the slower one
+  // along (both axes, momentum-conserving) — this is what makes side-by-side
+  // contact feel like carrying someone wide rather than pinball.
+  const k = 0.045;
+  const mvx = (b.vx - a.vx) * k, mvz = (b.vz - a.vz) * k;
+  if (moveBoth) {
+    a.vx += mvx / 2; a.vz += mvz / 2;
+    b.vx -= mvx / 2; b.vz -= mvz / 2;
+  } else {
+    a.vx += mvx; a.vz += mvz;
+  }
+
   const relN = (a.vx - b.vx) * nx + (a.vz - b.vz) * nz;
   if (relN <= 0) return 0; // already separating
-  // Soft nudges stay soft; hard hits get bouncy.
-  const e = clamp(relN / 25, 0.25, 0.65);
+  // Low-speed contact is INELASTIC (lean/push); only real hits bounce.
+  const e = clamp((relN - 6) / 25, 0, 0.6);
   const j = (1 + e) * relN / 2;
   a.vx -= nx * j; a.vz -= nz * j;
   if (moveBoth) { b.vx += nx * j; b.vz += nz * j; }
 
-  // Sideswipes trade rotation AND rub off tangential speed — bumps read as
-  // physical shoves, not velocity edits.
+  // Sideswipes trade rotation AND rub tangential speed — with the soft
+  // separation this now acts over several frames, dragging the other car's
+  // nose around rather than ticking it once.
   const relT = (a.vx - b.vx) * -nz + (a.vz - b.vz) * nx;
   const spin = clamp(relT * 0.05, -0.9, 0.9);
   a.yawVel = (a.yawVel ?? 0) + spin;
-  a.vx -= -nz * relT * 0.07; a.vz -= nx * relT * 0.07;
+  a.vx -= -nz * relT * 0.12; a.vz -= nx * relT * 0.12;
   if (moveBoth) {
     b.yawVel = (b.yawVel ?? 0) - spin;
-    b.vx += -nz * relT * 0.07; b.vz += nx * relT * 0.07;
+    b.vx += -nz * relT * 0.12; b.vz += nx * relT * 0.12;
   }
 
   // Massive impacts flip whoever got hit hardest across their beam.

@@ -17,7 +17,16 @@ export class Net {
     this.handlers = handlers;
     this.peers = new Map(); // id -> { profile, state, stateAt }
 
-    this.room = joinRoom({ appId: APP_ID }, code);
+    // Extra STUN diversity helps NAT traversal; TURN (for strict/symmetric
+    // NATs) needs a credential server — pending a Cloudflare TURN key.
+    this.room = joinRoom({
+      appId: APP_ID,
+      rtcConfig: {
+        iceServers: [
+          { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+        ],
+      },
+    }, code);
 
     const profileAction = this.room.makeAction('profile', {
       onMessage: (data, { peerId }) => {

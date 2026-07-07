@@ -1,9 +1,3 @@
 node_modules/
 dist/
 .DS_Store
-
-# personal music files (copyrighted) — playlist.json + README stay tracked
-public/music/*.mp3
-public/music/*.flac
-public/music/*.m4a
-public/music/*.ogg

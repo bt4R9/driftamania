@@ -1,5 +1,10 @@
 {
-  "menu": ["get_low.mp3"],
-  "race": ["the_only.mp3", "wonders_of_you.mp3"],
+  "menu": [
+    "menu.mp3"
+  ],
+  "race": [
+    "race1.mp3",
+    "race2.mp3"
+  ],
   "raceCooldown": 10
 }

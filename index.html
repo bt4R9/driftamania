@@ -61,8 +61,14 @@
     .hint { margin-top: 18px; font-size: 11px; color: var(--muted); line-height: 1.7; }
     .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; box-shadow: 0 0 8px currentColor; }
 
+    /* ---------- Splash gate (audio needs a real click) ---------- */
+    #splash { display: flex; background: radial-gradient(ellipse at 50% 25%, rgba(34,230,255,0.08), transparent 60%); }
+    #splash .card { background: transparent; border: none; box-shadow: none; }
+    #btn-start-game { margin-top: 30px; padding: 18px 60px; font-size: 18px; letter-spacing: 6px; animation: splash-pulse 1.6s ease-in-out infinite; }
+    @keyframes splash-pulse { 50% { box-shadow: 0 0 34px rgba(34,230,255,0.55); } }
+
     /* ---------- Menu ---------- */
-    #menu { display: flex; background: radial-gradient(ellipse at 50% 25%, rgba(34,230,255,0.06), transparent 60%); }
+    #menu { background: radial-gradient(ellipse at 50% 25%, rgba(34,230,255,0.06), transparent 60%); }
 
     /* ---------- Lobby ---------- */
     #lobby .card { width: min(680px, 94vw); }
@@ -164,6 +170,14 @@
     <div id="hud-drift">DRIFT</div>
     <div id="hud-msg"></div>
     <div id="hud-help" class="hud-panel">W/↑ gas · S/↓ brake · A/D steer · SPACE handbrake · R reset · M mute</div>
+  </div>
+
+  <div id="splash" class="overlay">
+    <div class="card">
+      <h1>DRIFTAMANIA</h1>
+      <div class="sub">NEON NIGHT · P2P RACING</div>
+      <button class="btn cyan" id="btn-start-game">START</button>
+    </div>
   </div>
 
   <div id="menu" class="overlay">

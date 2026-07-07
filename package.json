@@ -1,12 +1,13 @@
 {
   "name": "driftamania",
   "version": "1.0.0",
-  "description": "Driftamania \u2014 neon top-down P2P drift racer (Three.js + WebRTC)",
+  "description": "Driftamania — neon top-down P2P drift racer (Three.js + WebRTC)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "verify": "node scripts/drift-test.mjs && node scripts/simulate-race.mjs && node scripts/check-width.mjs"
+    "verify": "node scripts/drift-test.mjs && node scripts/simulate-race.mjs && node scripts/check-width.mjs",
+    "deploy": "vite build && wrangler deploy"
   },
   "keywords": [],
   "author": "",

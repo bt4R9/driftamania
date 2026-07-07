@@ -1,0 +1,10 @@
+{
+  // Driftamania — static deploy via Workers assets.
+  // Account pinned explicitly (two accounts on this machine).
+  "name": "driftamania",
+  "account_id": "c54b3304c82da05184d884d20a83751b",
+  "compatibility_date": "2026-07-07",
+  "assets": {
+    "directory": "./dist"
+  }
+}

@@ -28,6 +28,7 @@ const game = new Game($('app'), {
   },
 });
 game.loadTrack(trackId);
+window.__game = game; // test hook (scripts/mp-test.mjs) + console debugging
 
 function isHost() { return solo || (net?.isHost ?? true); }
 

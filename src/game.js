@@ -185,6 +185,7 @@ export class Game {
     this.finishCount = 0;
     this.phase = 'countdown';
     this.countdown = 3.0;
+    this.countdownEnd = performance.now() + 3000;
     this.audio.countTick(); // "3" — later ticks fire from the loop
     this.raceClock = 0;
     this.camAngle = this.local ? this.local.state.heading : 0;
@@ -311,8 +312,10 @@ export class Game {
     }
 
     if (this.phase === 'countdown') {
+      // Wall clock, not frame delta: background tabs get no rAF ticks, and a
+      // dt-driven countdown would freeze there while everyone else races.
       const before = Math.ceil(this.countdown);
-      this.countdown -= dt;
+      this.countdown = (this.countdownEnd - performance.now()) / 1000;
       const after = Math.ceil(this.countdown);
       if (after !== before && after >= 1) this.audio.countTick();
       if (this.countdown <= 0) {

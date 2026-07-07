@@ -448,7 +448,7 @@ function exportJson() {
 
 $('f-test').onclick = () => {
   saveDraft();
-  location.href = '/?testdrive=1'; // the game picks the draft up from localStorage
+  location.href = './?testdrive=1'; // the game picks the draft up from localStorage
 };
 
 $('f-export').onclick = () => {

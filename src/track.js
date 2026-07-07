@@ -85,16 +85,16 @@ export class Track {
         uniform float uLift;
         attribute vec2 aCell; // world-space center of this quad's grid cell
         varying vec2 vP;
-        varying vec2 vCell;
+        varying vec3 vW;
         varying float vH;
         ${WAVE_FNS}
         void main() {
           vec4 wp = modelMatrix * vec4(position, 1.0);
           vP = wp.xz;
-          vCell = aCell;
-          // Waves sampled ONCE per cell: every vertex of a square gets the
-          // same height, so squares step up/down as separate tiles.
+          // Waves sampled ONCE per cell in the VERTEX shader — the fragment
+          // used to recompute this per PIXEL (millions of sin() calls/frame).
           vec3 w = waves(aCell);
+          vW = w;
           float open = texture2D(tMask, (aCell + ${GROUND / 2}.0) / ${GROUND}.0).r; // 0 near the road
           vH = min(w.x + w.y * 0.9 + w.z * 0.8, 1.45) * open; // capped: no stacked towers
           wp.y += vH * uLift;
@@ -105,9 +105,8 @@ export class Track {
       fragmentShader: `
         #include <fog_pars_fragment>
         varying vec2 vP;
-        varying vec2 vCell;
+        varying vec3 vW;
         varying float vH;
-        ${WAVE_FNS}
         float gridLine(vec2 p, float cell, float w) {
           vec2 g = abs(fract(p / cell) - 0.5) * cell;
           float d = min(g.x, g.y);
@@ -117,7 +116,7 @@ export class Track {
         void main() {
           vec3 col = vec3(0.028, 0.031, 0.051);
           float line = gridLine(vP, ${CELL}.0, 0.16);
-          vec3 w = waves(vCell); // per-cell: tiles light up as units
+          vec3 w = vW; // per-tile wave value, computed once in the vertex stage
           vec3 glow = vec3(0.13, 0.90, 1.00) * w.x * 1.1
                     + vec3(1.00, 0.18, 0.60) * w.y * 0.9
                     + vec3(1.00, 0.77, 0.30) * w.z * 0.4;
@@ -131,10 +130,13 @@ export class Track {
         }`,
     });
     this.groundMat.uniforms.tMask.value = makeLiftMask(this.points, this.maxWidth);
-    const ground = new THREE.Mesh(makeCellGridGeometry(), this.groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.06;
-    group.add(ground);
+    // Chunked ground: 100 meshes instead of one 540k-vert monolith, so
+    // frustum culling drops ~85% of the net outside the camera every frame.
+    for (const geo of buildGroundChunks()) {
+      const chunk = new THREE.Mesh(geo, this.groundMat);
+      chunk.position.y = -0.06;
+      group.add(chunk);
+    }
 
     // Shadow the ground under elevated road — reads as "this is up high".
     group.add(this.roadShadow());
@@ -438,28 +440,45 @@ function buildDecorMesh(d) {
   return group;
 }
 
-// Disconnected-quads ground: every BLOCK×BLOCK cell owns its 6 vertices plus
-// an aCell attribute (the cell's world center), so cells can sit at different
-// heights — the wave steps tile by tile instead of bending a shared sheet.
-function makeCellGridGeometry() {
-  const n = GROUND / TILE;
-  const geo = new THREE.PlaneGeometry(GROUND, GROUND, n, n).toNonIndexed();
-  const pos = geo.attributes.position;
-  const cell = new Float32Array(pos.count * 2);
-  for (let t = 0; t < pos.count; t += 3) {
-    // Triangle centroid → owning cell (corners are ambiguous, centroids aren't).
-    const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3;
-    const cy = (pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3;
-    // Local plane (x, y) → world (x, -y) once the mesh is laid flat.
-    const wx = (Math.floor(cx / TILE) + 0.5) * TILE;
-    const wz = -(Math.floor(cy / TILE) + 0.5) * TILE;
-    for (let k = 0; k < 3; k++) {
-      cell[(t + k) * 2] = wx;
-      cell[(t + k) * 2 + 1] = wz;
+// Chunked disconnected-quads ground: every TILE cell owns its 6 vertices
+// plus an aCell attribute (cell center), built directly in world XZ so no
+// rotation is needed. Chunks of 30×30 tiles are individually frustum-culled.
+function buildGroundChunks() {
+  const tilesPerSide = GROUND / TILE;          // 300
+  const CHUNK_TILES = 30;                      // 10×10 chunks
+  const chunks = [];
+  for (let gz = 0; gz < tilesPerSide; gz += CHUNK_TILES) {
+    for (let gx = 0; gx < tilesPerSide; gx += CHUNK_TILES) {
+      const nT = CHUNK_TILES * CHUNK_TILES;
+      const pos = new Float32Array(nT * 6 * 3);
+      const cell = new Float32Array(nT * 6 * 2);
+      let vi = 0;
+      for (let tz = gz; tz < gz + CHUNK_TILES; tz++) {
+        for (let tx = gx; tx < gx + CHUNK_TILES; tx++) {
+          const x0 = tx * TILE - GROUND / 2, z0 = tz * TILE - GROUND / 2;
+          const x1 = x0 + TILE, z1 = z0 + TILE;
+          // two triangles, wound so the face normal points up
+          const tri = [x0, z0, x0, z1, x1, z0, x1, z0, x0, z1, x1, z1];
+          const cx = x0 + TILE / 2, cz = z0 + TILE / 2;
+          for (let k = 0; k < 6; k++) {
+            pos[vi * 3] = tri[k * 2];
+            pos[vi * 3 + 1] = 0;
+            pos[vi * 3 + 2] = tri[k * 2 + 1];
+            cell[vi * 2] = cx;
+            cell[vi * 2 + 1] = cz;
+            vi++;
+          }
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('aCell', new THREE.BufferAttribute(cell, 2));
+      geo.computeBoundingSphere();
+      geo.boundingSphere.radius += 26; // headroom for wave lift displacement
+      chunks.push(geo);
     }
   }
-  geo.setAttribute('aCell', new THREE.BufferAttribute(cell, 2));
-  return geo;
+  return chunks;
 }
 
 // Track-proximity mask for the wave lift: white = open field (full lift),

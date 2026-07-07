@@ -38,8 +38,8 @@ export class Game {
     this.cb = callbacks;
     this.net = null; // attached by main.js in multiplayer
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ antialias: false }); // composer never samples the MSAA buffer — pure waste
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); // DPR 2 + full-res bloom murders iGPUs
     this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
@@ -60,7 +60,7 @@ export class Game {
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.5, 0.55));
+    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.9, 0.5, 0.55)); // half-res bloom
     this.composer.addPass(new OutputPass());
 
     this.skids = new SkidTrails(this.scene);

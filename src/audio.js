@@ -10,7 +10,7 @@ export class AudioEngine {
     this.muted = localStorage.getItem('dc-muted') === '1';
     this.wantMusic = null;
     this.musicKind = null;
-    fetch('/music/playlist.json')
+    fetch(`${import.meta.env.BASE_URL}music/playlist.json`)
       .then((r) => r.json())
       .then((p) => { this.playlist = p; this._syncMusic(); })
       .catch(() => { this.playlist = null; });
@@ -110,7 +110,7 @@ export class AudioEngine {
     this.skidGain.gain.value = 0;
     this.skidGain.connect(this.master);
     this.skidRate = 1;
-    fetch('/sfx/skid.wav')
+    fetch(`${import.meta.env.BASE_URL}sfx/skid.wav`)
       .then((r) => r.arrayBuffer())
       .then((ab) => ctx.decodeAudioData(ab))
       .then((buf) => {
@@ -173,9 +173,9 @@ export class AudioEngine {
     let url;
     if (kind === 'race') {
       this.raceIdx = (this.raceIdx ?? -1) + 1;
-      url = '/music/' + list[this.raceIdx % list.length];
+      url = `${import.meta.env.BASE_URL}music/` + list[this.raceIdx % list.length];
     } else {
-      url = '/music/' + list[Math.floor(Math.random() * list.length)];
+      url = `${import.meta.env.BASE_URL}music/` + list[Math.floor(Math.random() * list.length)];
     }
     const el = new Audio(url);
     el.loop = kind === 'menu';

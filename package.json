@@ -1,7 +1,7 @@
 {
-  "name": "drift-circuit",
+  "name": "driftamania",
   "version": "1.0.0",
-  "description": "Top-down multiplayer drift racing game (Three.js + WebRTC via Trystero)",
+  "description": "Driftamania \u2014 neon top-down P2P drift racer (Three.js + WebRTC)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

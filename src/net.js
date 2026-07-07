@@ -7,7 +7,7 @@ import { joinRoom, selfId } from 'trystero';
 
 export { selfId };
 
-const APP_ID = 'drift-circuit-v1';
+const APP_ID = 'driftamania-v1';
 
 export class Net {
   // handlers: { onPeers, onState(id, state), onRace(msg, fromId), onFin(fin, id) }

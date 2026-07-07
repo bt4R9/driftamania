@@ -701,8 +701,11 @@ export class Game {
     const s = this.local ? this.local.state : this.ais[0].state;
     const speed = Math.hypot(s.vx, s.vz);
 
-    // Rotating top-down: camera "up" tracks the car heading.
-    this.camAngle += wrapAngle(s.heading - this.camAngle) * Math.min(1, 3.2 * dt);
+    // Rotating top-down: camera "up" tracks the car heading — but NOT while
+    // the car is tumbling/wrecked (chasing a spinning heading whips the whole
+    // world around; hold rotation and let the car pirouette on screen).
+    const headRate = (s.tumble > 0 || s.wrecked > 0) ? 0 : 3.2;
+    this.camAngle += wrapAngle(s.heading - this.camAngle) * Math.min(1, headRate * dt);
     const targetH = 52 + speed * 0.9;
     this.camHeight += (targetH - this.camHeight) * Math.min(1, 2 * dt);
     this.camY += ((s.y ?? 0) - this.camY) * Math.min(1, 4 * dt); // soft vertical follow
@@ -711,8 +714,14 @@ export class Game {
     const tiltTarget = 0.785 * clamp(speed / 85, 0, 1);
     this.camTilt += (tiltTarget - this.camTilt) * Math.min(1, 2 * dt);
 
-    const lookX = s.x + s.vx * 0.45;
-    const lookZ = s.z + s.vz * 0.45;
+    // Look-ahead uses SMOOTHED velocity: raw velocity changes in a single
+    // frame during a crash impulse, which used to teleport the aim point
+    // (and the camera with it) — the visible "twitch" on every contact.
+    const lk = Math.min(1, 4 * dt);
+    this.lookVx = (this.lookVx ?? s.vx) + (s.vx - (this.lookVx ?? s.vx)) * lk;
+    this.lookVz = (this.lookVz ?? s.vz) + (s.vz - (this.lookVz ?? s.vz)) * lk;
+    const lookX = s.x + this.lookVx * 0.45;
+    const lookZ = s.z + this.lookVz * 0.45;
     const bx = Math.sin(this.camAngle), bz = Math.cos(this.camAngle);
     const back = Math.sin(this.camTilt) * this.camHeight;
     this.camera.position.set(

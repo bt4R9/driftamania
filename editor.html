@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drift Circuit — Track Editor</title>
+  <style>
+    :root {
+      --bg: #05060a; --panel: rgba(10, 12, 20, 0.92); --border: #1d2334;
+      --cyan: #22e6ff; --magenta: #ff2d9a; --lime: #b6ff3d; --amber: #ffb14d;
+      --text: #e8eaf0; --muted: #7d86a0;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: var(--bg); }
+    body { font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; color: var(--text); }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    #panel {
+      position: fixed; right: 0; top: 0; bottom: 0; width: 300px; z-index: 10;
+      background: var(--panel); border-left: 1px solid var(--border);
+      padding: 14px; overflow-y: auto; backdrop-filter: blur(6px);
+    }
+    #panel h1 { font-size: 16px; letter-spacing: 3px; font-style: italic; margin-bottom: 2px;
+      background: linear-gradient(90deg, var(--cyan), var(--magenta));
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+    #panel .hint { font-size: 10px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+    #panel section { border-top: 1px solid var(--border); padding: 10px 0; }
+    #panel .sec-title { font-size: 10px; letter-spacing: 2px; color: var(--muted); margin-bottom: 8px; }
+    #panel label { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted); margin: 4px 0; gap: 8px; }
+    #panel input[type=text], #panel input[type=number], #panel select {
+      width: 130px; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--border);
+      background: #070910; color: var(--text); font-size: 12px; outline: none;
+    }
+    #panel input:focus { border-color: var(--cyan); }
+    .btn {
+      display: inline-block; padding: 7px 10px; margin: 3px 2px; border: 1px solid var(--border); border-radius: 7px;
+      font-size: 11px; font-weight: 700; letter-spacing: 1px; cursor: pointer;
+      background: #171d2c; color: var(--text);
+    }
+    .btn:hover { filter: brightness(1.3); }
+    .btn.cyan { border-color: var(--cyan); color: var(--cyan); }
+    .btn.red { border-color: #ff4d4d; color: #ff4d4d; }
+    .btn.amber { border-color: var(--amber); color: var(--amber); }
+    #validation { font-size: 11px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+    #validation .ok { color: var(--lime); }
+    #validation .bad { color: #ff4d4d; }
+    #ramp-list .ramp-row {
+      font-size: 11px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px;
+      margin: 3px 0; cursor: pointer; color: var(--muted);
+    }
+    #ramp-list .ramp-row.selected { border-color: var(--amber); color: var(--amber); }
+    #status { position: fixed; left: 12px; bottom: 10px; z-index: 10; font-size: 11px; color: var(--muted);
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="status"></div>
+
+  <div id="panel">
+    <h1>TRACK EDITOR</h1>
+    <div class="hint">
+      Drag points to shape the track. Click a point or ramp to select it.
+      Scroll = zoom · drag empty space = pan.<br/>
+      Green marker = start/finish (drive direction: toward point 2).
+    </div>
+
+    <section>
+      <div class="sec-title">TRACK</div>
+      <label>Name <input type="text" id="t-name" maxlength="18" /></label>
+      <label>Blurb <input type="text" id="t-blurb" maxlength="40" /></label>
+      <label>Template
+        <select id="t-template">
+          <option value="">— load built-in —</option>
+          <option value="apex">APEX GP</option>
+          <option value="docks">HAIRPIN DOCKS</option>
+          <option value="infinity">INFINITY</option>
+          <option value="oval">Blank oval</option>
+        </select>
+      </label>
+    </section>
+
+    <section id="sec-point" style="display:none">
+      <div class="sec-title">POINT <span id="p-idx"></span></div>
+      <label>X <input type="number" id="p-x" step="5" /></label>
+      <label>Z <input type="number" id="p-z" step="5" /></label>
+      <label>Height <input type="number" id="p-y" step="1" min="0" max="30" /></label>
+      <label>Width <input type="number" id="p-w" step="2" min="20" max="80" /></label>
+      <button class="btn cyan" id="p-insert">+ INSERT AFTER</button>
+      <button class="btn red" id="p-delete">DELETE</button>
+    </section>
+
+    <section id="sec-ramp" style="display:none">
+      <div class="sec-title">RAMP <span id="r-idx"></span></div>
+      <label>Length <input type="number" id="r-len" step="2" min="10" max="80" /></label>
+      <label>Lip height <input type="number" id="r-h" step="0.5" min="2" max="15" /></label>
+      <label>Width
+        <select id="r-w">
+          <option value="lane">lane (⅓ road, random side)</option>
+          <option value="full">full road width</option>
+          <option value="custom">custom…</option>
+        </select>
+      </label>
+      <label id="r-wc-row" style="display:none">Custom width <input type="number" id="r-wc" step="2" min="6" max="60" /></label>
+      <label id="r-lane-row">Lane
+        <select id="r-lane">
+          <option value="random">random each race</option>
+          <option value="1">left</option>
+          <option value="0">center</option>
+          <option value="-1">right</option>
+        </select>
+      </label>
+      <label>Direction
+        <select id="r-dir-mode">
+          <option value="auto">auto (track flow)</option>
+          <option value="manual">manual…</option>
+        </select>
+      </label>
+      <label id="r-dir-row" style="display:none">Degrees <input type="number" id="r-dir" step="5" min="-180" max="180" /></label>
+      <button class="btn red" id="r-delete">DELETE RAMP</button>
+    </section>
+
+    <section id="sec-decor" style="display:none">
+      <div class="sec-title">DECOR <span id="d-type"></span></div>
+      <label id="d-len-row">Length <input type="number" id="d-len" step="2" min="4" max="120" /></label>
+      <label>Height <input type="number" id="d-h" step="1" min="1" max="30" /></label>
+      <label>Direction
+        <select id="d-dir-mode">
+          <option value="auto">auto (track flow)</option>
+          <option value="manual">manual…</option>
+        </select>
+      </label>
+      <label id="d-dir-row" style="display:none">Degrees <input type="number" id="d-dir" step="5" min="-180" max="180" /></label>
+      <button class="btn red" id="d-delete">DELETE</button>
+    </section>
+
+    <section>
+      <div class="sec-title">DECOR</div>
+      <button class="btn red" data-decor="wall">+ WALL</button>
+      <button class="btn amber" data-decor="block">+ BLOCK</button>
+      <button class="btn cyan" data-decor="arch">+ ARCH</button>
+      <button class="btn" data-decor="pylon">+ PYLON</button>
+      <div class="hint">Walls & blocks are solid (low walls are jumpable); arches & pylons are visual.</div>
+    </section>
+
+    <section>
+      <div class="sec-title">RAMPS</div>
+      <div id="ramp-list"></div>
+      <button class="btn amber" id="r-add">+ ADD RAMP (click map)</button>
+    </section>
+
+    <section>
+      <div class="sec-title">VALIDATION</div>
+      <div id="validation"></div>
+    </section>
+
+    <section>
+      <div class="sec-title">FILE</div>
+      <button class="btn cyan" id="f-test" style="width:100%">▶ TEST DRIVE</button>
+      <button class="btn cyan" id="f-export">⬇ EXPORT JSON</button>
+      <button class="btn" id="f-copy">COPY</button>
+      <button class="btn" id="f-import">⬆ IMPORT</button>
+      <input type="file" id="f-file" accept=".json,application/json" style="display:none" />
+      <div class="hint" style="margin-top:6px">
+        Import the file in the game lobby (host) to race it — the definition
+        syncs to all players automatically.
+      </div>
+      <a class="btn" href="/" style="text-decoration:none">← BACK TO GAME</a>
+    </section>
+  </div>
+
+  <script type="module" src="/src/editor.js"></script>
+</body>
+</html>

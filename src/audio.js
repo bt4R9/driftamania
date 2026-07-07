@@ -19,7 +19,9 @@ export class AudioEngine {
       if (this.ctx.state === 'suspended') this.ctx.resume().then(() => this._syncMusic());
       this._syncMusic();
     };
-    addEventListener('pointerdown', unlock);
+    // 'click' (not pointerdown!) — Chrome only counts a completed click as
+    // user activation for audio, so unlocking on pointerdown logs a warning.
+    addEventListener('click', unlock);
     addEventListener('keydown', (e) => {
       unlock();
       if (e.code === 'KeyM') this.toggleMute();

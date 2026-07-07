@@ -97,7 +97,7 @@ export class Game {
       this.composer.setSize(innerWidth, innerHeight);
     });
 
-    this.clock = new THREE.Clock();
+    this.timer = new THREE.Timer();
 
     // Diagnostics overlay: open the game with ?perf=1 to watch fps, frame
     // time, JS heap and GPU object counts live.
@@ -273,7 +273,8 @@ export class Game {
 
   // ---- Per-frame ----
   frame() {
-    const dt = Math.min(this.clock.getDelta(), 1 / 30);
+    this.timer.update();
+    const dt = Math.min(this.timer.getDelta(), 1 / 30);
     const t0 = this.perfEl ? performance.now() : 0;
     if (this.track) this.update(dt);
     this.composer.render();

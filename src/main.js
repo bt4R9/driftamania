@@ -283,24 +283,32 @@ $('btn-results-menu').onclick = () => {
   }
 };
 
-// Test-drive entry from the editor: load the draft and race it solo, now.
-if (new URLSearchParams(location.search).has('testdrive')) {
-  try {
-    const d = JSON.parse(localStorage.getItem('dc-editor-draft'));
-    if (d?.points?.length >= 4) {
-      solo = true;
-      ui.hideMenu();
-      ui.setRoomLabel('TEST DRIVE · <b>BACK TO EDITOR</b>');
-      $('hud-room').onclick = () => { location.href = '/editor.html'; };
-      beginRace(
-        { name: d.name ?? 'TEST TRACK', blurb: '', points: d.points, ramps: d.ramps ?? [], decor: d.decor ?? [] },
-        null, null,
-      );
-    }
-  } catch { /* fall through to the normal menu */ }
-}
+// Splash gate: the first REAL click lands here, which activates the
+// AudioContext cleanly — then the actual menu (or a pending test drive) shows.
+$('btn-start-game').onclick = () => {
+  $('splash').style.display = 'none';
 
-game.audio.playMusic('menu'); // starts on the first click (autoplay policy)
+  // Test-drive entry from the editor: load the draft and race it solo, now.
+  if (new URLSearchParams(location.search).has('testdrive')) {
+    try {
+      const d = JSON.parse(localStorage.getItem('dc-editor-draft'));
+      if (d?.points?.length >= 4) {
+        solo = true;
+        ui.hideMenu();
+        ui.setRoomLabel('TEST DRIVE · <b>BACK TO EDITOR</b>');
+        $('hud-room').onclick = () => { location.href = './editor.html'; };
+        beginRace(
+          { name: d.name ?? 'TEST TRACK', blurb: '', points: d.points, ramps: d.ramps ?? [], decor: d.decor ?? [] },
+          null, null,
+        );
+        return;
+      }
+    } catch { /* fall through to the normal menu */ }
+  }
+  ui.showMenu();
+};
+
+game.audio.playMusic('menu'); // queued; starts the moment the splash is clicked
 
 // Prefill a room code from the URL hash (share links like game.html#TRBO)
 const hashCode = location.hash.slice(1).toUpperCase();

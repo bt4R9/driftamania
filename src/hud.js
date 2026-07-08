@@ -1,5 +1,7 @@
 // DOM overlay updates: in-race HUD, lobby, results. No game logic here.
 
+import { buildTrackGeometry } from './trackgeom.js';
+
 const $ = (id) => document.getElementById(id);
 
 export function formatTime(t) {
@@ -27,35 +29,34 @@ export function updateHud(d) {
   $('pos-num').textContent = d.position > 0 ? `P${d.position}` : '';
   $('lap-time').textContent = formatTime(d.lapTime);
   $('lap-best').textContent = `best ${formatTime(d.bestLap)}`;
-  $('hud-drift').style.opacity = d.drifting ? 1 : 0;
+  const driftEl = $('hud-drift');
+  driftEl.style.opacity = d.drifting ? 1 : 0;
+  driftEl.textContent = (d.mult ?? 1) > 1 ? `DRIFT ×${d.mult}` : 'DRIFT';
 
-  // Score + drift chain / jump / lost feedback
+  // Score feedback — numbers and colors only:
+  //   orange = pending drift points, green = banked, red = lost.
   $('score-num').textContent = (d.score ?? 0).toLocaleString();
   const chain = $('hud-chain');
-  if (d.wrecked) {
-    chain.textContent = 'WRECKED — RESPAWNING…';
-    chain.style.color = '#ff4d4d';
-    chain.style.opacity = 1;
-  } else if (d.tumbling) {
-    chain.textContent = 'FLIPPING!';
-    chain.style.color = '#ffb14d';
-    chain.style.opacity = 1;
-  } else if (d.lostFlash > 0) {
-    chain.textContent = 'CRASH — DRIFT LOST';
+  if (d.lostFlash > 0) {
+    chain.textContent = `+${d.lostPts}`;
     chain.style.color = '#ff4d4d';
     chain.style.opacity = Math.min(1, d.lostFlash);
+  } else if (d.chain > 0) {
+    chain.textContent = `+${d.chain}`;
+    chain.style.color = '#ffb14d';
+    chain.style.opacity = 0.45 + 0.55 * d.chainT;
+  } else if (d.bankFlash > 0) {
+    chain.textContent = `+${d.bankPts}`;
+    chain.style.color = '#b6ff3d';
+    chain.style.opacity = Math.min(1, d.bankFlash);
   } else if (d.boostFlash > 0) {
     chain.textContent = 'BOOST';
     chain.style.color = '#22e6ff';
     chain.style.opacity = Math.min(1, d.boostFlash);
   } else if (d.jumpFlash > 0) {
-    chain.textContent = `AIR +${d.jumpPts}`;
+    chain.textContent = `+${d.jumpPts}`;
     chain.style.color = '#b6ff3d';
     chain.style.opacity = Math.min(1, d.jumpFlash);
-  } else if (d.chain > 0) {
-    chain.textContent = `+${d.chain}`;
-    chain.style.color = '#ff2d9a';
-    chain.style.opacity = 0.35 + 0.65 * d.chainT;
   } else {
     chain.style.opacity = 0;
   }
@@ -74,6 +75,12 @@ export function updateHud(d) {
     msg.textContent = `FINISHED — P${d.position}`;
     msg.style.opacity = 1;
     msg.style.color = '#22e6ff';
+  } else if (d.finishWindow != null && d.phase === 'racing') {
+    // Chase window: someone already won — finish before this hits zero or
+    // the finish bonus is gone. Amber, going red as it runs out.
+    msg.textContent = Math.ceil(d.finishWindow);
+    msg.style.opacity = d.finishWindow > 0 ? 1 : 0;
+    msg.style.color = d.finishWindow > 10 ? '#ffb14d' : '#ff4d4d';
   } else if (d.wrongWay) {
     msg.textContent = 'WRONG WAY';
     msg.style.opacity = 1;
@@ -82,11 +89,14 @@ export function updateHud(d) {
     msg.style.opacity = 0;
   }
 
-  // Standings board
+  // Cinema mode: fade the results card so the flyover shots show through.
+  $('results').classList.toggle('cinema', !!d.cinema);
+
+  // Standings board — ranked and displayed by SCORE; lap is secondary.
   const html = d.standings.map((r, i) => `
     <div class="entry${r.isSelf ? ' self' : ''}">
       <span><span class="dot" style="background:${hex(r.color)}"></span>P${i + 1} ${esc(r.name)}</span>
-      <span>${r.finished ? formatTime(r.time) : `L${r.lap}`}</span>
+      <span>${(r.score ?? 0).toLocaleString()} <span style="color:var(--muted);font-size:10px">${r.finished ? '✓' : `L${r.lap}`}</span></span>
     </div>`).join('');
   if (html !== lastBoardHtml) {
     lastBoardHtml = html;
@@ -120,6 +130,61 @@ export function showLobby({ title, players, isHost, trackId, statusText, solo, m
 }
 
 export function hideLobby() { $('lobby').style.display = 'none'; }
+
+// Static top-down preview of a track def, drawn into a lobby button canvas.
+// Same look as the HUD minimap: road band, amber ramps, start tick.
+export function renderTrackPreview(def, cv) {
+  const g = buildTrackGeometry(def, 7);
+  const ctx = cv.getContext('2d');
+  const S = g.sampleCount;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of g.points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+  }
+  const pad = 6 + g.maxWidth / 2 * (cv.width / Math.max(maxX - minX, maxZ - minZ));
+  const s = Math.min(
+    (cv.width - 2 * pad) / Math.max(1, maxX - minX),
+    (cv.height - 2 * pad) / Math.max(1, maxZ - minZ),
+  );
+  const pt = (x, z) => [cv.width / 2 + (x - (minX + maxX) / 2) * s, cv.height / 2 + (z - (minZ + maxZ) / 2) * s];
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.beginPath();
+  for (let i = 0; i <= S; i += 4) {
+    const j = i % S;
+    const e = g.sideOffset(j, g.clampLat(j, g.halfWidthAt(j)));
+    const [mx, my] = pt(e.x, e.z);
+    i === 0 ? ctx.moveTo(mx, my) : ctx.lineTo(mx, my);
+  }
+  for (let i = S; i >= 0; i -= 4) {
+    const j = i % S;
+    const e = g.sideOffset(j, g.clampLat(j, -g.halfWidthAt(j)));
+    const [mx, my] = pt(e.x, e.z);
+    ctx.lineTo(mx, my);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(96,106,138,0.6)';
+  ctx.fill();
+  for (const r of g.ramps) {
+    const px = -r.fz, pz = r.fx, hw = r.w / 2;
+    ctx.beginPath();
+    [[r.footX + px * hw, r.footZ + pz * hw], [r.footX - px * hw, r.footZ - pz * hw],
+     [r.lipX - px * hw, r.lipZ - pz * hw], [r.lipX + px * hw, r.lipZ + pz * hw]].forEach(([wx, wz], i) => {
+      const [mx, my] = pt(wx, wz);
+      i === 0 ? ctx.moveTo(mx, my) : ctx.lineTo(mx, my);
+    });
+    ctx.closePath();
+    ctx.fillStyle = '#ffb14d';
+    ctx.fill();
+  }
+  const n = g.normalAt(0);
+  const p0 = g.points[0];
+  const hw0 = g.halfWidthAt(0);
+  const [ax, ay] = pt(p0.x + n.nx * hw0, p0.z + n.nz * hw0);
+  const [bx, by] = pt(p0.x - n.nx * hw0, p0.z - n.nz * hw0);
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+  ctx.lineWidth = 2; ctx.strokeStyle = '#e8e8e8'; ctx.stroke();
+}
 
 // ---- Results ----
 export function showResults(rows, { isHost, solo }) {

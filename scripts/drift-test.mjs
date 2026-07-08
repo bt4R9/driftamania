@@ -53,8 +53,39 @@ scenario('flick + counter-steer catch', (t) => {
   return { throttle: 1, steer: 0, handbrake: false };
 }, 6);
 
+// 5+6. Mid-drift pedal feel: brake / handbrake DURING an established slide
+// must deepen the angle (weight transfer / locked rears), not straighten the
+// car while hard-stopping it. Compare slip just before the input vs after.
+// A 0.8s stab mid-drift, then a counter-steer catch: the stab must deepen the
+// angle by a clear margin, the catch must still bring it back (no auto-spin).
+function midDriftScenario(name, midInput) {
+  const car = makeCarState(0, 0, 0);
+  car.vx = 0; car.vz = 55;
+  const dt = 1 / 60;
+  let slipBefore = 0, maxAfter = 0, speedBefore = 0, speedAfter = 1e9, endSlip = 0;
+  for (let t = 0; t < 6.0; t += dt) {
+    const input = t < 0.5 ? { throttle: 1, steer: 0, handbrake: false }
+      : t < 1.0 ? { throttle: 0, steer: 1, handbrake: true }
+      : t < 2.5 ? { throttle: 1, steer: 0.55, handbrake: false }
+      : t < 3.3 ? midInput
+      : t < 4.2 ? { throttle: 1, steer: -0.7, handbrake: false } // the catch
+      : { throttle: 1, steer: 0, handbrake: false };
+    stepCar(car, input, dt, track);
+    const slipDeg = Math.abs(wrapAngle(Math.atan2(car.vx, car.vz) - car.heading)) * 180 / Math.PI;
+    if (t < 2.5) { slipBefore = slipDeg; speedBefore = Math.hypot(car.vx, car.vz); }
+    else if (t < 3.3) { maxAfter = Math.max(maxAfter, slipDeg); speedAfter = Math.min(speedAfter, Math.hypot(car.vx, car.vz)); }
+    endSlip = slipDeg;
+  }
+  const deepened = maxAfter > slipBefore + 6;
+  const caught = endSlip < 12;
+  console.log(`${name.padEnd(28)} slip ${slipBefore.toFixed(0)}°→${maxAfter.toFixed(0)}° speed ${speedBefore.toFixed(0)}→${speedAfter.toFixed(0)} end=${endSlip.toFixed(0)}° `
+    + `${deepened ? 'DEEPENS ✓' : 'FLATTENS ✗'} ${caught ? 'CATCHABLE ✓' : 'SPINS ✗'}`);
+}
+midDriftScenario('brake stab mid-drift', { throttle: -1, steer: 0.55, handbrake: false });
+midDriftScenario('handbrake stab mid-drift', { throttle: 0, steer: 0.55, handbrake: true });
+
 // 4. Recovery inertia: mid-drift, straighten the wheel at t=2.5 — how long
-// until the car actually hooks up (slip < 5°)? Want ~0.8-1.5s, not instant.
+// until the car actually hooks up (slip < 5°)? Want ~1.4-2.2s — heavy, not instant.
 {
   const car = makeCarState(0, 0, 0);
   car.vx = 0; car.vz = 55;
@@ -69,5 +100,5 @@ scenario('flick + counter-steer catch', (t) => {
     const slipDeg = Math.abs(wrapAngle(Math.atan2(car.vx, car.vz) - car.heading)) * 180 / Math.PI;
     if (t > 2.5 && hookupAt === null && slipDeg < 5) hookupAt = t - 2.5;
   }
-  console.log(`recovery after straightening   hookup in ${hookupAt === null ? '>4.5' : hookupAt.toFixed(2)}s (want 0.8-1.5)`);
+  console.log(`recovery after straightening   hookup in ${hookupAt === null ? '>4.5' : hookupAt.toFixed(2)}s (want 1.4-2.2 — exiting a drift should take commitment)`);
 }

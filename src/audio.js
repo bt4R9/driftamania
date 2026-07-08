@@ -24,7 +24,8 @@ export class AudioEngine {
     addEventListener('click', unlock);
     addEventListener('keydown', (e) => {
       unlock();
-      if (e.code === 'KeyM') this.toggleMute();
+      // not while typing a name/room code — an 'M' there must not mute the game
+      if (e.code === 'KeyM' && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) this.toggleMute();
     });
   }
 
@@ -168,19 +169,23 @@ export class AudioEngine {
     clearTimeout(this.musicTimer);
     this._fadeOutMusic();
     this.musicKind = kind;
-    const list = (kind && this.playlist[kind]) || [];
-    if (!list.length) return;
-    // Menu loops its track; race plays the playlist IN ORDER, with a
-    // cooldown of quiet between tracks (playlist.json: raceCooldown seconds).
-    let url;
-    if (kind === 'race') {
-      this.raceIdx = (this.raceIdx ?? -1) + 1;
-      url = `${import.meta.env.BASE_URL}music/` + list[this.raceIdx % list.length];
-    } else {
-      url = `${import.meta.env.BASE_URL}music/` + list[Math.floor(Math.random() * list.length)];
-    }
-    const el = new Audio(url);
-    el.loop = kind === 'menu';
+    if (kind && (this.playlist[kind] ?? []).length) this._playTrack(kind);
+  }
+
+  // Rotation per kind: first play starts at a random track, then every song
+  // end (and every re-entry into the kind) advances to the next, cycling.
+  _nextTrack(kind) {
+    const list = this.playlist[kind];
+    this.musicIdx ??= {};
+    const cur = this.musicIdx[kind];
+    this.musicIdx[kind] = cur == null ? Math.floor(Math.random() * list.length) : (cur + 1) % list.length;
+    return list[this.musicIdx[kind]];
+  }
+
+  _playTrack(kind) {
+    const list = this.playlist[kind];
+    const el = new Audio(`${import.meta.env.BASE_URL}music/` + this._nextTrack(kind));
+    el.loop = list.length === 1; // a one-track playlist just loops
     const srcNode = this.ctx.createMediaElementSource(el);
     const g = this.ctx.createGain();
     g.gain.value = 0;
@@ -190,22 +195,23 @@ export class AudioEngine {
       .then(() => g.gain.setTargetAtTime(0.35, this.ctx.currentTime, 0.6))
       .catch(() => { /* file missing or blocked — stay silent */ });
     el.onended = () => {
-      // race track finished → quiet cooldown → next track in order
-      const cooldown = (this.playlist.raceCooldown ?? 8) * 1000;
+      if (this.wantMusic !== kind) return;
+      // quiet cooldown between tracks (playlist.json: raceCooldown /
+      // menuCooldown seconds), long for races, short in the menu.
+      const cooldown = (this.playlist[kind + 'Cooldown'] ?? (kind === 'race' ? 8 : 3)) * 1000;
       this.musicTimer = setTimeout(() => {
-        if (this.wantMusic === 'race') {
-          this.musicKind = null;
-          this._syncMusic();
-        }
+        if (this.wantMusic === kind) this._playTrack(kind);
       }, cooldown);
     };
-    el.onerror = () => { this.music = null; };
-    this.music = { el, g };
+    el.onerror = () => { if (this.music?.el === el) this.music = null; };
+    // keep srcNode referenced — an unreferenced element can be GC'd mid-play
+    this.music = { el, g, srcNode };
   }
 
   _fadeOutMusic() {
     if (!this.music) return;
     const { el, g } = this.music;
+    el.onended = el.onerror = null; // src='' below fires 'error' on this dead element
     g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.25);
     setTimeout(() => { el.pause(); el.src = ''; }, 900);
     this.music = null;

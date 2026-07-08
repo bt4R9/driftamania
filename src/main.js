@@ -48,23 +48,49 @@ function modelFor(id) {
 }
 
 // ---------- Menu ----------
+// Two views inside the menu card: 'home' (single/multi/editor) and 'mp' (room code).
+function showMenuView(view) {
+  $('menu-home').style.display = view === 'home' ? '' : 'none';
+  $('menu-mp').style.display = view === 'mp' ? '' : 'none';
+}
+
 $('btn-solo').onclick = () => {
   solo = true;
   ui.setRoomLabel('');
   enterLobby();
 };
-$('btn-create').onclick = () => joinMultiplayer(makeRoomCode());
+$('btn-multi').onclick = () => showMenuView('mp');
+$('btn-menu-back').onclick = () => showMenuView('home');
+$('btn-create').onclick = () => joinMultiplayer(makeRoomCode(), { created: true });
 $('btn-join').onclick = () => {
   const code = $('room-input').value.trim().toUpperCase();
   if (code.length < 4) { $('room-input').focus(); return; }
   joinMultiplayer(code);
 };
+$('room-input').onkeydown = (e) => { if (e.key === 'Enter') $('btn-join').click(); };
 
-function joinMultiplayer(code) {
+// Joining is P2P: entering any code "succeeds" instantly, even a typo'd one —
+// there is no server to reject it. So a joiner who sees nobody after a while
+// gets an explicit "no race found" instead of a convincingly empty lobby.
+let wasCreator = false;
+let joinSearching = false;
+let joinSearchTimer = null;
+
+function joinMultiplayer(code, { created = false } = {}) {
   solo = false;
   ready = false;
+  wasCreator = created;
+  joinSearching = !created;
+  clearTimeout(joinSearchTimer);
+  if (!created) {
+    joinSearchTimer = setTimeout(() => {
+      joinSearching = false;
+      if (!racing && net && net.peers.size === 0) enterLobby();
+    }, 12000);
+  }
   net = new Net(code, { name: myName(), ready: false }, {
     onPeers: () => {
+      if (net.peers.size > 0) { joinSearching = false; clearTimeout(joinSearchTimer); }
       if (!racing) enterLobby();
       maybeAutoStart();
     },
@@ -132,7 +158,11 @@ function enterLobby() {
     isHost: isHost(),
     trackId,
     statusText: (customDef ? `CUSTOM TRACK: ${customDef.name} · ` : '') + (solo ? '' : (net.peers.size === 0
-      ? 'share the room code — race starts when everyone is ready'
+      ? (wasCreator
+        ? 'share the room code — race starts when everyone is ready'
+        : (joinSearching
+          ? `looking for race ${net.code}…`
+          : `⚠ no race found for code ${net.code} — check the code or create a new race`))
       : (ready ? 'waiting for the others to ready up…' : 'hit READY when you are set'))),
     solo,
     myReady: ready,
@@ -142,7 +172,13 @@ function enterLobby() {
 for (const t of TRACKS) {
   const btn = document.createElement('button');
   btn.dataset.track = t.id;
-  btn.innerHTML = `${t.name}<span>${t.blurb}</span>`;
+  const preview = document.createElement('canvas');
+  preview.className = 'track-preview';
+  preview.width = 200;
+  preview.height = 130;
+  ui.renderTrackPreview(t, preview);
+  btn.appendChild(preview);
+  btn.insertAdjacentHTML('beforeend', `${t.name}<span>${t.blurb}</span>`);
   btn.onclick = () => {
     if (!isHost()) return;
     trackId = t.id;
@@ -187,6 +223,7 @@ $('track-file').onchange = async (e) => {
 
 $('btn-leave').onclick = () => {
   game.audio.playMusic('menu');
+  clearTimeout(joinSearchTimer);
   net?.leave();
   net = null;
   game.net = null;
@@ -194,6 +231,7 @@ $('btn-leave').onclick = () => {
   game.toIdle();
   ui.hideLobby();
   ui.setRoomLabel('');
+  showMenuView('home');
   ui.showMenu();
 };
 
@@ -278,6 +316,7 @@ $('btn-results-menu').onclick = () => {
     game.audio.playMusic('menu');
     ui.hideResults();
     ui.setHudVisible(false);
+    showMenuView('home');
     ui.showMenu();
   } else {
     backToLobby();
@@ -312,5 +351,9 @@ $('btn-start-game').onclick = () => {
 game.audio.playMusic('menu'); // queued; starts the moment the splash is clicked
 
 // Prefill a room code from the URL hash (share links like game.html#TRBO)
+// and land straight on the multiplayer view so joining is one click.
 const hashCode = location.hash.slice(1).toUpperCase();
-if (/^[A-Z2-9]{4,5}$/.test(hashCode)) $('room-input').value = hashCode;
+if (/^[A-Z2-9]{4,5}$/.test(hashCode)) {
+  $('room-input').value = hashCode;
+  showMenuView('mp');
+}

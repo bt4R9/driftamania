@@ -58,6 +58,15 @@
     .btn.magenta:hover { box-shadow: 0 0 18px rgba(255, 45, 154, 0.35); }
     .row { display: flex; gap: 10px; }
     .row .btn { flex: 1; }
+    .or-divider {
+      display: flex; align-items: center; gap: 12px; margin: 18px 0 4px;
+      color: var(--muted); font-size: 10px; letter-spacing: 2px;
+    }
+    .or-divider::before, .or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .join-row { align-items: stretch; }
+    .join-row input { flex: 1; width: auto; margin-top: 12px; }
+    .join-row .btn { flex: 0 0 auto; width: auto; padding: 12px 26px; }
+    .btn .blurb { display: block; margin-top: 3px; font-size: 9.5px; font-weight: 400; letter-spacing: 1.5px; opacity: .65; }
     .hint { margin-top: 18px; font-size: 11px; color: var(--muted); line-height: 1.7; }
     .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; box-shadow: 0 0 8px currentColor; }
 
@@ -76,18 +85,22 @@
     #lobby-players { margin: 14px 0; text-align: left; }
     #lobby-players .player { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 14px; letter-spacing: 1px; }
     #lobby-players .tag { color: var(--muted); font-size: 10px; letter-spacing: 2px; margin-left: 6px; }
-    #lobby-tracks { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 6px; }
+    #lobby-tracks { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 200px)); justify-content: center; gap: 8px; margin-top: 6px; }
     #lobby-tracks button {
       padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border);
       background: #0b0e18; color: var(--text); font-size: 11px; font-weight: 700; letter-spacing: 1px;
       cursor: pointer; line-height: 1.5;
     }
     #lobby-tracks button span { display: block; color: var(--muted); font-weight: 400; font-size: 9.5px; }
+    #lobby-tracks .track-preview { display: block; width: 100%; height: auto; margin-bottom: 6px; }
     #lobby-tracks button.selected { border-color: var(--cyan); box-shadow: 0 0 14px rgba(34,230,255,.25); color: var(--cyan); }
     #lobby-tracks button:disabled { cursor: default; opacity: .75; }
     #lobby-status { margin-top: 12px; font-size: 11px; color: var(--muted); letter-spacing: 1px; min-height: 15px; }
 
     /* ---------- Results ---------- */
+    #results .card { transition: opacity .7s; }
+    #results.cinema .card { opacity: 0.3; }
+    #results.cinema .card:hover { opacity: 1; }
     #results .card { width: min(480px, 94vw); }
     #results-list { margin: 16px 0; text-align: left; }
     #results-list .entry {
@@ -184,19 +197,25 @@
     <div class="card">
       <h1>DRIFTAMANIA</h1>
       <div class="sub">NEON NIGHT · P2P RACING</div>
-      <label for="name-input">DRIVER NAME</label>
-      <input id="name-input" maxlength="12" placeholder="PLAYER" autocomplete="off" />
-      <label for="room-input">ROOM CODE</label>
-      <input id="room-input" maxlength="5" placeholder="e.g. TRBO" autocomplete="off" />
-      <div class="row">
-        <button class="btn cyan" id="btn-create">CREATE RACE</button>
-        <button class="btn magenta" id="btn-join">JOIN RACE</button>
+      <div id="menu-home">
+        <label for="name-input">DRIVER NAME</label>
+        <input id="name-input" maxlength="12" placeholder="PLAYER" autocomplete="off" />
+        <button class="btn cyan" id="btn-solo">SINGLE PLAYER<span class="blurb">RACE VS 3 AI DRIVERS</span></button>
+        <button class="btn magenta" id="btn-multi">MULTI PLAYER<span class="blurb">P2P RACE WITH FRIENDS</span></button>
+        <a class="btn" href="editor.html" style="text-decoration:none">🛠 MAP EDITOR<span class="blurb">BUILD YOUR OWN CIRCUIT</span></a>
       </div>
-      <button class="btn" id="btn-solo">SINGLE PLAYER · VS 3 AI</button>
-      <a class="btn" href="editor.html" style="text-decoration:none">🛠 TRACK EDITOR</a>
-      <div class="hint">
-        Pure peer-to-peer over WebRTC — no game server.<br/>
-        Create a race, share the code, friends join from anywhere.
+      <div id="menu-mp" style="display:none">
+        <button class="btn cyan" id="btn-create">CREATE RACE<span class="blurb">GET A ROOM CODE TO SHARE WITH FRIENDS</span></button>
+        <div class="or-divider"><span>OR JOIN WITH A CODE</span></div>
+        <div class="row join-row">
+          <input id="room-input" maxlength="5" placeholder="e.g. TRBO" autocomplete="off" />
+          <button class="btn magenta" id="btn-join">JOIN</button>
+        </div>
+        <button class="btn" id="btn-menu-back">← BACK</button>
+        <div class="hint">
+          Pure peer-to-peer over WebRTC — no game server.<br/>
+          Create a race, share the code, friends join from anywhere.
+        </div>
       </div>
     </div>
   </div>

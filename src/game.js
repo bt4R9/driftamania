@@ -18,9 +18,13 @@ const SEND_INTERVAL = 0.05; // 20 Hz state broadcast
 
 const DRIFT_GRACE = 0.4;    // s to chain drifts after a slide ends
 const LAP_BONUS = 300;      // score for each completed lap
-// Finish-position bonus: racing well IS score — P1 earns far more, so the
-// winner is decided by total score (position + style combined).
-const FINISH_BONUS = [4000, 2800, 2000, 1500, 1200, 1000, 850, 700];
+// Finish economy: the FIRST finisher banks a huge bonus and starts the chase
+// window — everyone else's bonus shrinks with every second they take to
+// reach the line, and hits zero when the window closes.
+const FIRST_FINISH_BONUS = 4000;
+const CHASE_BONUS = 2500;   // scales linearly down across the window
+const FINISH_WINDOW = 30;   // seconds
+const INTRO_MS = 6500;      // pre-countdown flyover duration
 const CRASH_HIT = 6;        // wall-impact speed that counts as a crash
 const JUMP_MIN_DIST = 8;    // shorter hops score nothing
 
@@ -170,7 +174,7 @@ export class Game {
       const car = {
         entry, state, mesh,
         lap: 0, lapStart: 0, bestLap: null, finished: false, finishTime: null,
-        score: 0, chain: 0, chainTimer: 0, airStart: null, airOk: true,
+        score: 0, chain: 0, chainTimer: 0, driftRun: 0, mult: 1, airStart: null, airOk: true,
       };
       if (entry.key === 'self') this.local = car;
       else if (entry.key.startsWith('ai:')) { car.driver = new AiDriver(entry.skill ?? 1); this.ais.push(car); }
@@ -183,10 +187,10 @@ export class Game {
     });
 
     this.finishCount = 0;
-    this.phase = 'countdown';
+    this.finishWindow = null;
+    this.phase = 'intro'; // flyover first; the countdown starts when it lands
+    this.introEnd = performance.now() + INTRO_MS;
     this.countdown = 3.0;
-    this.countdownEnd = performance.now() + 3000;
-    this.audio.countTick(); // "3" — later ticks fire from the loop
     this.raceClock = 0;
     this.camAngle = this.local ? this.local.state.heading : 0;
 
@@ -311,7 +315,13 @@ export class Game {
       return;
     }
 
-    if (this.phase === 'countdown') {
+    if (this.phase === 'intro') {
+      if (performance.now() >= this.introEnd) {
+        this.phase = 'countdown';
+        this.countdownEnd = performance.now() + 3000;
+        this.audio.countTick(); // "3" — later ticks fire from the loop
+      }
+    } else if (this.phase === 'countdown') {
       // Wall clock, not frame delta: background tabs get no rAF ticks, and a
       // dt-driven countdown would freeze there while everyone else races.
       const before = Math.ceil(this.countdown);
@@ -325,7 +335,7 @@ export class Game {
     } else if (this.phase === 'racing') {
       this.raceClock += dt;
     }
-    const locked = this.phase === 'countdown';
+    const locked = this.phase === 'countdown' || this.phase === 'intro';
 
     // --- Local car ---
     if (this.local) {
@@ -419,6 +429,8 @@ export class Game {
 
     this.jumpFlash = Math.max(0, (this.jumpFlash ?? 0) - dt);
     this.lostFlash = Math.max(0, (this.lostFlash ?? 0) - dt);
+    this.bankFlash = Math.max(0, (this.bankFlash ?? 0) - dt);
+    if (this.finishWindow != null) this.finishWindow = Math.max(0, this.finishWindow - dt);
     this.boostFlash = Math.max(0, (this.boostFlash ?? 0) - dt);
     if (this.phase === 'racing') this.updatePickups(dt);
 
@@ -481,6 +493,7 @@ export class Game {
           vx: round2(s.vx), vz: round2(s.vz),
           dr: s.drifting ? 1 : 0, br: brakeOn(s, readControls()) ? 1 : 0,
           prog: Math.round(s.progress), fin: this.local.finished ? 1 : 0,
+          sc: Math.round(this.local.score), // live score for the leaderboard
         });
       }
     }
@@ -518,22 +531,55 @@ export class Game {
     }
 
     if (s.drifting) {
-      car.chain += dt * speed * (0.4 + clamp(Math.abs(s.slip) / 12, 0, 1) * 0.8) * 1.5;
+      // Multiplier "heat": ×2/×4 are forgiving — they hold at realistic
+      // mid-corner drift speeds (deep angle ~75+, moderate ~90 km/h) and
+      // survive the slip dips of linked transitions. The demand is
+      // concentrated on ×8: deep angle at ~110+ km/h, or it bleeds away.
+      // 1x → 2x (3.5 heat) → 4x (8) → 8x (13); flawless reaches ×8 in ~11s.
+      const kmh = speed * 3.4;
+      const q = clamp((Math.abs(s.slip) - 5) / 9, 0, 1) * clamp((kmh - 40) / 80, 0, 1);
+      const run = car.driftRun ?? 0;
+      const need = run >= 13 ? 0.85 : run >= 8 ? 0.40 : run >= 3.5 ? 0.30 : 0.20;
+      car.qTime = q >= need ? (car.qTime ?? 0) + dt : 0;
+      const rate = q >= need
+        ? (car.qTime > 0.4 ? 1.25 * (q - need) / (1 - need) : 0) // sustained quality above the bar earns
+        : (q - need) * 6 - 0.3; // below the bar: bleeds
+      // Heat can't climb INTO a tier whose bar the drift doesn't meet — it
+      // parks just under the boundary instead of flapping across it. The cap
+      // only binds while rising; losing a tier is always the gradual bleed.
+      const cap = q >= 0.85 ? 15 : q >= 0.40 ? 12.9 : q >= 0.30 ? 7.9 : 3.4;
+      car.driftRun = clamp(run + rate * dt, 0, rate > 0 ? Math.max(run, cap) : 15);
+      car.mult = car.driftRun >= 13 ? 8 : car.driftRun >= 8 ? 4 : car.driftRun >= 3.5 ? 2 : 1;
+      car.chain += dt * speed * (0.4 + clamp(Math.abs(s.slip) / 12, 0, 1) * 0.8) * 1.5 * car.mult;
       car.chainTimer = DRIFT_GRACE;
     } else if (car.chainTimer > 0) {
       car.chainTimer -= dt;
+      car.driftRun = Math.max(0, (car.driftRun ?? 0) - 2.5 * dt); // heat cools off-throttle
+      car.qTime = 0;
+      car.mult = car.driftRun >= 13 ? 8 : car.driftRun >= 8 ? 4 : car.driftRun >= 3.5 ? 2 : 1;
       if (car.chainTimer <= 0 && car.chain > 0) {
-        car.score += Math.round(car.chain);
+        const pts = Math.round(car.chain);
+        car.score += pts;
         car.chain = 0;
-        if (isLocal) this.audio.beep(740, 0.09, 0.12, 'sine');
+        car.driftRun = 0;
+        car.mult = 1;
+        if (isLocal) {
+          this.bankFlash = 1.4;
+          this.bankPts = pts;
+          this.audio.beep(740, 0.09, 0.12, 'sine');
+        }
       }
     }
 
     if ((s.wallHit > CRASH_HIT || s.tumble > 0) && car.chain > 0) {
+      const lost = Math.round(car.chain);
       car.chain = 0;
       car.chainTimer = 0;
-      if (isLocal) {
+      car.driftRun = 0;
+      car.mult = 1;
+      if (isLocal && lost > 0) {
         this.lostFlash = 1.5;
+        this.lostPts = lost;
         this.audio.beep(130, 0.3, 0.22, 'sawtooth');
       }
     }
@@ -558,14 +604,23 @@ export class Game {
         car.finishTime = this.raceClock;
         car.score += Math.round(car.chain); // bank any live chain at the line
         car.chain = 0;
-        // position bonus: order across local, AI and remote finishers
+        // First across the line: huge bonus + the chase window opens.
+        // Everyone after: bonus scales with how much window is left.
         this.finishCount = (this.finishCount ?? 0) + 1;
-        car.score += FINISH_BONUS[Math.min(this.finishCount - 1, FINISH_BONUS.length - 1)];
+        if (this.finishCount === 1) {
+          car.score += FIRST_FINISH_BONUS;
+          this.finishWindow = FINISH_WINDOW;
+        } else {
+          car.score += Math.round(CHASE_BONUS * clamp((this.finishWindow ?? 0) / FINISH_WINDOW, 0, 1));
+        }
         const entry = {
           key: car.entry.key, name: car.entry.name, color: car.entry.color,
           time: car.finishTime, bestLap: car.bestLap, score: Math.round(car.score),
         };
-        if (car === this.local) this.cb.onLocalFinish?.(entry);
+        if (car === this.local) {
+          this.localFinishedAt = performance.now();
+          this.cb.onLocalFinish?.(entry);
+        }
         else this.cb.onEntryFinish?.(entry);
       }
     }
@@ -669,12 +724,38 @@ export class Game {
     b.position.y = bodyRoll
       ? Math.max(Math.abs(Math.sin(bodyRoll)) * 0.95, (1 - Math.cos(bodyRoll)) * 0.78)
       : 0;
-    car.mesh.setGroundFx(clamp(Math.cos(bodyRoll), 0, 1));
-
-    // Tilt ground-projected lights to the local grade.
+    // Ground-projected lights: pinned to the ROAD surface (not the car — an
+    // airborne car must not drag its light pool into the sky), faded out with
+    // altitude. The underglow/pool ride a flat plane; the headlight ribbon
+    // conforms row-by-row to the terrain so it hugs crests and dips.
     const fwdX = Math.sin(s.heading), fwdZ = Math.cos(s.heading);
-    const hAhead = this.track.groundAt(s.x + fwdX * 8, s.z + fwdZ * 8, s.trackIdx ?? 0);
-    car.mesh.groundFx.rotation.x = -Math.atan2(hAhead - groundHere, 8);
+    const alt = Math.max(0, (s.y ?? 0) - groundHere);
+    car.mesh.groundFx.position.y = groundHere - (s.y ?? 0);
+    const beam = car.mesh.beam;
+    if (beam) {
+      const pos = beam.mesh.geometry.attributes.position;
+      const colA = beam.mesh.geometry.attributes.color;
+      // Light travels straight: rows whose ground drops below the lamp's
+      // sight line (the back side of a crest) get no light — fade them out
+      // instead of draping a bright fold down the far slope.
+      const lampY = groundHere - (s.y ?? 0) + 0.7;
+      let runFade = 1; // monotonic: once light leaves the ground it can't
+      for (let r = 0; r <= beam.rows; r++) { // re-appear on a far rise as a detached blob
+        const d = beam.z0 + (beam.z1 - beam.z0) * (r / beam.rows);
+        const gy = this.track.groundAt(s.x + fwdX * d, s.z + fwdZ * d, s.trackIdx ?? 0)
+          - (s.y ?? 0) + 0.09;
+        pos.setY(r * 2, gy);
+        pos.setY(r * 2 + 1, gy);
+        const rayY = lampY - 0.035 * d;
+        runFade = Math.min(runFade, clamp(1 - Math.max(0, rayY - gy - 0.9) / 2.2, 0, 1));
+        colA.setW(r * 2, runFade);
+        colA.setW(r * 2 + 1, runFade);
+      }
+      pos.needsUpdate = true;
+      colA.needsUpdate = true;
+    }
+    car.mesh.setGroundFx(clamp(Math.cos(bodyRoll), 0, 1) * clamp(1 - alt * 0.14, 0, 1));
+    car.mesh.setXray?.(!!this.track.overhead?.[s.trackIdx ?? 0]);
 
     // Landing squash: set by carEffects, decays here.
     car.squash = Math.max(0, (car.squash ?? 0) - 0.07);
@@ -692,7 +773,6 @@ export class Game {
       this.scene.add(car.shadow);
     }
     car.shadow.rotation.z = s.heading; // long axis follows the car
-    const alt = Math.max(0, (s.y ?? 0) - groundHere);
     car.shadow.position.set(s.x, groundHere + 0.07, s.z);
     car.shadow.scale.setScalar(Math.max(0.45, 1 - alt * 0.03));
     car.shadow.material.opacity = 0.4 * Math.max(0.25, 1 - alt * 0.05);
@@ -704,6 +784,68 @@ export class Game {
     const s = this.local ? this.local.state : this.ais[0].state;
     const speed = Math.hypot(s.vx, s.vz);
 
+    // Intro flyover: swoop in from ahead of the grid, sweep sideways over
+    // the cars, and land exactly on the racing camera as the countdown begins.
+    if (this.phase === 'intro') {
+      const t = clamp(1 - (this.introEnd - performance.now()) / INTRO_MS, 0, 1);
+      const e = t * t * (3 - 2 * t); // smoothstep
+      const fx = Math.sin(s.heading), fz = Math.cos(s.heading);
+      const px = fz, pz = -fx;
+      const ax = s.x + fx * 450, az = s.z + fz * 450, ay = (s.y ?? 0) + 140; // far ahead + high: show the track
+      const by = (s.y ?? 0) + 52;                                           // chase height
+      const sweep = Math.sin(e * Math.PI) * 110;
+      this.camera.position.set(
+        ax + (s.x - ax) * e + px * sweep,
+        ay + (by - ay) * e * e,
+        az + (s.z - az) * e + pz * sweep,
+      );
+      this.camera.up.set(fx * e, 1 - e * 0.999, fz * e).normalize();
+      this.camera.lookAt(s.x, (s.y ?? 0) + 1, s.z);
+      // prime the racing camera so the handoff is seamless
+      this.camAngle = s.heading;
+      this.camHeight = 52;
+      this.camTilt = 0;
+      this.camY = s.y ?? 0;
+      this.lookVx = 0;
+      this.lookVz = 0;
+      return;
+    }
+
+    // Finished and waiting: cinema mode — flyovers of the drivers still
+    // racing, a fresh angle every few seconds.
+    this.cinemaActive = this.local?.finished && this.phase === 'racing'
+      && performance.now() - (this.localFinishedAt ?? 0) > 5000;
+    if (this.cinemaActive) {
+      const racers = [...this.ais, ...this.remotes.values()]
+        .filter((c) => !c.finished && !c.target?.fin);
+      if (racers.length) {
+        const now = performance.now();
+        if (!this.cine || now > this.cine.until || !racers.includes(this.cine.car)) {
+          this.cine = {
+            car: racers[Math.floor(Math.random() * racers.length)],
+            until: now + 4200,
+            t0: now,
+            az: Math.random() * Math.PI * 2,
+            spin: (Math.random() < 0.5 ? -1 : 1) * (0.08 + Math.random() * 0.22),
+            r: 26 + Math.random() * 42,
+            h: 12 + Math.random() * 42,
+          };
+        }
+        const c = this.cine;
+        const st = c.car.render ?? c.car.state;
+        const az = c.az + c.spin * ((now - c.t0) / 1000);
+        this.camera.position.set(
+          st.x + Math.sin(az) * c.r,
+          (st.y ?? 0) + c.h,
+          st.z + Math.cos(az) * c.r,
+        );
+        this.camera.up.set(0, 1, 0);
+        this.camera.lookAt(st.x, (st.y ?? 0) + 1.5, st.z);
+        return;
+      }
+      this.cine = null;
+    }
+
     // Rotating top-down: camera "up" tracks the car heading — but NOT while
     // the car is tumbling/wrecked (chasing a spinning heading whips the whole
     // world around; hold rotation and let the car pirouette on screen).
@@ -713,8 +855,8 @@ export class Game {
     this.camHeight += (targetH - this.camHeight) * Math.min(1, 2 * dt);
     this.camY += ((s.y ?? 0) - this.camY) * Math.min(1, 4 * dt); // soft vertical follow
 
-    // Speed tilt: ~45° off vertical at top speed for forward visibility.
-    const tiltTarget = 0.785 * clamp(speed / 85, 0, 1);
+    // Speed tilt: ~55° off vertical at top speed for forward visibility.
+    const tiltTarget = 0.96 * clamp(speed / 85, 0, 1);
     this.camTilt += (tiltTarget - this.camTilt) * Math.min(1, 2 * dt);
 
     // Look-ahead uses SMOOTHED velocity: raw velocity changes in a single
@@ -860,24 +1002,22 @@ export class Game {
   standings() {
     const S = this.track.sampleCount;
     const rows = [];
-    if (this.local) rows.push(row(this.local, this.local.state.progress));
-    for (const ai of this.ais) rows.push(row(ai, ai.state.progress));
+    if (this.local) rows.push(row(this.local, this.local.state.progress, this.local.score));
+    for (const ai of this.ais) rows.push(row(ai, ai.state.progress, ai.score));
     for (const rc of this.remotes.values()) {
-      rows.push(row(rc, rc.target ? rc.target.prog : -S));
+      rows.push(row(rc, rc.target ? rc.target.prog : -S, rc.target?.sc ?? 0));
     }
-    rows.sort((a, b) => {
-      if (a.finished && b.finished) return a.time - b.time;
-      if (a.finished !== b.finished) return a.finished ? -1 : 1;
-      return b.progress - a.progress;
-    });
+    // Leaderboard = SCORE (the win condition); progress only breaks ties.
+    rows.sort((a, b) => (b.score - a.score) || (b.progress - a.progress));
     return rows;
 
-    function row(car, progress) {
+    function row(car, progress, score) {
       return {
         key: car.entry.key, name: car.entry.name, color: car.entry.color,
         isSelf: car.entry.key === 'self',
         lap: Math.min(Math.floor(Math.max(progress, 0) / S) + 1, LAPS),
         progress,
+        score: Math.round(score ?? 0),
         finished: car.finished || !!car.target?.fin,
         time: car.finishTime ?? Infinity,
       };
@@ -906,10 +1046,16 @@ export class Game {
       score: Math.round(this.local.score),
       chain: Math.round(this.local.chain),
       chainT: clamp((this.local.chainTimer ?? 0) / DRIFT_GRACE, 0, 1),
+      mult: this.local.mult ?? 1,
       jumpFlash: this.jumpFlash ?? 0,
       jumpPts: this.jumpPts ?? 0,
       lostFlash: this.lostFlash ?? 0,
+      lostPts: this.lostPts ?? 0,
+      bankFlash: this.bankFlash ?? 0,
+      bankPts: this.bankPts ?? 0,
       boostFlash: this.boostFlash ?? 0,
+      finishWindow: this.finishWindow,
+      cinema: !!this.cinemaActive,
     });
   }
 
@@ -933,7 +1079,9 @@ export class Game {
     if (rc && !rc.finished) {
       rc.finished = true;
       rc.finishTime = fin.time;
-      this.finishCount = (this.finishCount ?? 0) + 1; // they took a podium slot
+      this.finishCount = (this.finishCount ?? 0) + 1;
+      // A remote winner opens the chase window on this client too.
+      if (this.finishCount === 1) this.finishWindow = FINISH_WINDOW;
     }
   }
 }

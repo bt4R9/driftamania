@@ -26,6 +26,7 @@ const mkPage = async (tag) => {
 
 const a = await mkPage('A');
 await a.type('#name-input', 'ALPHA');
+await a.click('#btn-multi');
 await a.click('#btn-create');
 await a.waitForFunction(() => document.querySelector('#lobby')?.style.display === 'flex', { timeout: 10000 });
 const code = await a.evaluate(() => document.querySelector('#lobby-title').textContent.replace('ROOM', '').trim());
@@ -33,6 +34,7 @@ console.log('room code:', code);
 
 const b = await mkPage('B');
 await b.type('#name-input', 'BRAVO');
+await b.click('#btn-multi');
 await b.type('#room-input', code);
 await b.click('#btn-join');
 await b.waitForFunction(() => document.querySelector('#lobby')?.style.display === 'flex', { timeout: 10000 });

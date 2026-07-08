@@ -63,7 +63,7 @@
     <div class="hint">
       Drag points to shape the track. Click a point or ramp to select it.
       Scroll = zoom · drag empty space = pan.<br/>
-      Green marker = start/finish (drive direction: toward point 2).
+      ⌘/Ctrl+C·V copies & pastes the selected object (⌘D duplicates). Green marker = start/finish (drive direction: toward point 2).
     </div>
 
     <section>
@@ -73,9 +73,7 @@
       <label>Template
         <select id="t-template">
           <option value="">— load built-in —</option>
-          <option value="apex">APEX GP</option>
-          <option value="docks">HAIRPIN DOCKS</option>
-          <option value="infinity">INFINITY</option>
+          <option value="mytrack">NOSTALGIA</option>
           <option value="oval">Blank oval</option>
         </select>
       </label>
@@ -118,13 +116,27 @@
         </select>
       </label>
       <label id="r-dir-row" style="display:none">Degrees <input type="number" id="r-dir" step="5" min="-180" max="180" /></label>
+      <button class="btn" id="r-dup">DUPLICATE</button>
       <button class="btn red" id="r-delete">DELETE RAMP</button>
     </section>
 
     <section id="sec-decor" style="display:none">
       <div class="sec-title">DECOR <span id="d-type"></span></div>
-      <label id="d-len-row">Length <input type="number" id="d-len" step="2" min="4" max="120" /></label>
-      <label>Height <input type="number" id="d-h" step="1" min="1" max="30" /></label>
+      <label id="d-len-row">Width <input type="number" id="d-len" step="2" min="4" max="120" /></label>
+      <label id="d-dep-row" style="display:none">Depth <input type="number" id="d-dep" step="2" min="6" max="120" /></label>
+      <label id="d-h-row">Height <input type="number" id="d-h" step="1" min="1" max="30" /></label>
+      <label id="d-floors-row" style="display:none">Floors <input type="number" id="d-floors" step="1" min="1" max="40" /></label>
+      <label id="d-neon-row" style="display:none">Neon
+        <select id="d-neon">
+          <option value="0">cyan</option>
+          <option value="1">magenta</option>
+          <option value="2">amber</option>
+          <option value="3">lime</option>
+          <option value="4">violet</option>
+          <option value="5">red</option>
+          <option value="6">ice white</option>
+        </select>
+      </label>
       <label>Direction
         <select id="d-dir-mode">
           <option value="auto">auto (track flow)</option>
@@ -132,6 +144,7 @@
         </select>
       </label>
       <label id="d-dir-row" style="display:none">Degrees <input type="number" id="d-dir" step="5" min="-180" max="180" /></label>
+      <button class="btn" id="d-dup">DUPLICATE</button>
       <button class="btn red" id="d-delete">DELETE</button>
     </section>
 
@@ -141,7 +154,10 @@
       <button class="btn amber" data-decor="block">+ BLOCK</button>
       <button class="btn cyan" data-decor="arch">+ ARCH</button>
       <button class="btn" data-decor="pylon">+ PYLON</button>
-      <div class="hint">Walls & blocks are solid (low walls are jumpable); arches & pylons are visual.</div>
+      <button class="btn cyan" data-decor="building">+ BUILDING</button>
+      <button class="btn amber" data-decor="billboard">+ BILLBOARD</button>
+      <div class="hint">Walls & blocks are solid (low walls are jumpable); arches, pylons — see game.
+        Buildings have neon windows per floor; billboards are glowing road signs.</div>
     </section>
 
     <section>

@@ -1,10 +1,15 @@
 {
   "menu": [
-    "menu.mp3"
+    "menu1.mp3",
+    "menu2.mp3"
   ],
   "race": [
     "race1.mp3",
-    "race2.mp3"
+    "race2.mp3",
+    "race3.mp3",
+    "race4.mp3",
+    "race5.mp3"
   ],
-  "raceCooldown": 10
+  "raceCooldown": 6,
+  "menuCooldown": 3
 }

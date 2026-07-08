@@ -9,23 +9,24 @@
 export const CAR_RADIUS = 1.7;
 export const MAX_SPEED = 100; // ~320 km/h on the HUD
 
-const ACCEL = 30;
+const ACCEL = 14; // launch punch — 0-100 km/h in ~2.5s, not ~1s
 const BRAKE = 70;
 const REVERSE_ACCEL = 15;
 const MAX_REVERSE = 11;
 const DRAG = 0.00135;
 const ROLL = 0.6;
 
-const GRIP = 7;            // 1/s lateral decay, full grip
-const GRIP_HANDBRAKE = 1.2;
-const GRIP_POWERSLIDE = 1.1;   // sliding + on throttle: rear stays loose
-const GRIP_SLIDE_NEUTRAL = 1.6; // sliding, no pedal: slide bleeds off slowly
-const GRIP_TRAILBRAKE = 2.6;
-const GRIP_LIFTOFF = 5.0;
+const GRIP = 6.2;          // 1/s lateral decay, full grip — a touch greasy even hooked up
+const GRIP_HANDBRAKE = 0.9;   // yanked MID-drift this kicks the tail out further
+const GRIP_POWERSLIDE = 0.85;   // sliding + on throttle: rear stays loose
+const GRIP_SLIDE_NEUTRAL = 1.3; // sliding, no pedal: slide bleeds off slowly
+const GRIP_SLIDE_BRAKE = 1.15; // brake MID-slide: weight forward, rear gets looser
+const GRIP_TRAILBRAKE = 2.4;   // brake while GRIPPED: rotate into the corner
+const GRIP_LIFTOFF = 4.4;
 const GRIP_DROP = 8;           // 1/s — losing grip is fast...
-const GRIP_REGAIN = 1.6;       // ...but hooking back up takes real time (inertia)
-const SLIDE_ENTER = 3.5;       // |vL| to consider the rear loose...
-const SLIDE_EXIT = 1.2;        // ...and to consider it hooked up again
+const GRIP_REGAIN = 2.2;       // ...but hooking back up takes real time (inertia)
+const SLIDE_ENTER = 3.0;       // |vL| to consider the rear loose...
+const SLIDE_EXIT = 1.0;        // ...and to consider it hooked up again
 
 // Yaw is a rotational-inertia model: steering and alignment apply TORQUE to an
 // angular velocity that persists. Gripped, damping is high so it feels direct.
@@ -59,6 +60,7 @@ const TUMBLE_CAR_HIT = 22;    // car-to-car closing speed that flips
 const TUMBLE_LANDING = 30;    // fall speed that flips on its own...
 const TUMBLE_SIDE_LANDING = 15; // ...or this, if landing sideways (slip > 12)
 
+const WALL_HEIGHT = 2.2;  // ~2.4m barriers — jumpable with real air
 export const GRAV = 30;    // arcade gravity — snappy jump arcs at racing speed
 const LAUNCH_MARGIN = 11;  // ground must fall away this much faster than gravity to launch
 
@@ -79,6 +81,7 @@ export function makeCarState(x = 0, z = 0, heading = 0) {
     steer: 0,          // smoothed steering [-1, 1]
     grip: GRIP,        // smoothed grip (regimes blend, no snap)
     sliding: false,    // rear-loose flag with hysteresis
+    offTrack: false,   // cleared a barrier — off the road surface
     trackIdx: 0,       // nearest centerline sample (windowed)
     lat: 0,            // signed lateral offset from centerline (+ = left)
     progress: 0,       // accumulated samples travelled (laps = progress / SAMPLES)
@@ -132,7 +135,7 @@ export function stepCar(car, input, dt, track) {
         // The flip's CONSEQUENCE depends on how you land: on the wheels =
         // drive on; on the side or roof = wrecked, respawn in a moment.
         const r = wrapAngle(car.rollAngle);
-        if (Math.abs(r) > 1.2) { // generous: the suspension catches steep landings
+        if (Math.abs(r) > 1.2 || car.offTrack) { // off-track always wrecks
           car.wrecked = 2.0;
           car.rollAngle = r;
           car.restRoll = Math.abs(r) > 2.4 ? Math.PI * Math.sign(r) : (Math.PI / 2) * Math.sign(r);
@@ -161,6 +164,7 @@ export function stepCar(car, input, dt, track) {
       car.tumbleSpin = 0;
       car.grounded = true;
       car.sliding = false;
+      car.offTrack = false;
       car.grip = GRIP;
     }
   } else if (car.rollAngle !== 0) {
@@ -179,15 +183,18 @@ export function stepCar(car, input, dt, track) {
   let vL = car.vx * rx + car.vz * rz;
 
   // --- Longitudinal (wheels only work on the ground) ---
+  // Sideways tyres can't brake: retardation fades with slip, so brake and
+  // handbrake mid-drift shape the SLIDE instead of just scrubbing speed.
+  const slipFade = clamp(Math.abs(vL) / 12, 0, 1);
   let aF = 0;
   if (car.grounded) {
     if (input.throttle > 0) {
-      aF += (vF < -0.5 ? BRAKE : ACCEL * (1 - 0.6 * clamp(vF / MAX_SPEED, 0, 1))) * input.throttle;
+      aF += (vF < -0.5 ? BRAKE : ACCEL * (1 - 0.25 * clamp(vF / MAX_SPEED, 0, 1))) * input.throttle;
     } else if (input.throttle < 0) {
-      aF += (vF > 0.5 ? BRAKE : (vF > -MAX_REVERSE ? REVERSE_ACCEL : 0)) * input.throttle;
+      aF += (vF > 0.5 ? BRAKE * (1 - 0.8 * slipFade) : (vF > -MAX_REVERSE ? REVERSE_ACCEL : 0)) * input.throttle;
     }
     aF -= ROLL * Math.sign(vF) * clamp(Math.abs(vF), 0, 1);
-    if (input.handbrake) aF -= vF * 0.8;
+    if (input.handbrake) aF -= vF * (0.8 - 0.55 * slipFade);
     // Gravity along the road grade (sampled numerically along the heading so
     // spline hills AND free-standing ramps both drag/push correctly).
     if (track.groundAt) {
@@ -212,8 +219,10 @@ export function stepCar(car, input, dt, track) {
   if (input.handbrake) {
     gripTarget = GRIP_HANDBRAKE;
   } else if (car.sliding) {
-    if (input.throttle > 0.2) gripTarget = GRIP_POWERSLIDE;
-    else if (input.throttle < -0.1) gripTarget = GRIP_TRAILBRAKE;
+    // On throttle the rear stays loose while you STEER the slide; straighten
+    // the wheel and grip creeps back — long greasy holds, prompt recovery.
+    if (input.throttle > 0.2) gripTarget = GRIP_POWERSLIDE + (1 - Math.abs(car.steer)) ** 2 * 0.3;
+    else if (input.throttle < -0.1) gripTarget = GRIP_SLIDE_BRAKE; // deepens, not straightens
     else gripTarget = GRIP_SLIDE_NEUTRAL;
   } else if (input.throttle < -0.1 && vF > 6) {
     gripTarget = GRIP_TRAILBRAKE; // brake into corner to rotate
@@ -251,6 +260,17 @@ export function stepCar(car, input, dt, track) {
     torque = steerT + alignT;
     damp = YAW_DAMP_GRIP + (YAW_DAMP_SLIDE - YAW_DAMP_GRIP) * slipNorm;
 
+    // Pedals SHAPE the drift: mid-slide, brake (weight forward) and
+    // handbrake (locked rears) throw yaw INTO the slide — an immediate,
+    // feelable rotation kick, not just slower slip decay.
+    if (car.sliding) {
+      // "into the slide" = AWAY from the velocity vector — opposite sign to
+      // the alignment torque (which straightens).
+      const into = slipAngle !== 0 ? -Math.sign(slipAngle) : Math.sign(car.steer || 1);
+      if (input.throttle < -0.1) torque += into * 2.4 * slipNorm * -input.throttle;
+      if (input.handbrake) torque += into * 3.4 * slipNorm;
+    }
+
     // Counter-steer assist: oppose slip growth only (recovery stays free),
     // fading to nothing at deep angles so over-rotation still spins.
     const slipRate = clamp((slipAngle - car.prevSlip) / dt, -3, 3);
@@ -284,28 +304,38 @@ export function stepCar(car, input, dt, track) {
   if (track.clampLat) {
     limit = Math.abs(track.clampLat(pr.index, (pr.lat >= 0 ? 1 : -1) * limit));
   }
-  if (pr.dist > limit) {
-    const inv = 1 / (pr.dist || 1e-6);
-    const nx = (car.x - pr.px) * inv, nz = (car.z - pr.pz) * inv; // outward normal
-    car.x = pr.px + nx * limit;
-    car.z = pr.pz + nz * limit;
-    const vN = car.vx * nx + car.vz * nz;
-    if (vN > 0) {
-      car.vx -= nx * vN * 1.35; // bounce (restitution 0.35)
-      car.vz -= nz * vN * 1.35;
-      car.vx *= 0.93; // scrape
-      car.vz *= 0.93;
-      car.wallHit = vN;
-      // Glancing hits twist the car: torque scales with how off-axis the
-      // contact is (zero for a square head-on, max for a shallow scrape),
-      // rotating the nose away from the wall.
-      const offAxis = fz * nx - fx * nz;
-      car.yawVel += clamp(-offAxis * Math.min(vN, 16) * 0.09, -1.4, 1.4);
-      // Truly violent wall hits flip the car over.
-      if (vN > TUMBLE_WALL_HIT) {
-        startTumble(car, (vN - TUMBLE_WALL_HIT) / 15, offAxis >= 0 ? 1 : -1);
+  // Barriers are WAIST-HIGH, not infinite: fly higher than WALL_HEIGHT above
+  // the road and you clear them into the void — committed to a crash landing
+  // and a respawn. On the ground they still contain you like before.
+  const roadY = track.heightAt ? track.heightAt(pr.index) : 0;
+  if (!car.offTrack && pr.dist > limit) {
+    if (car.y > roadY + WALL_HEIGHT) {
+      car.offTrack = true; // sailed over the barrier
+    } else {
+      const inv = 1 / (pr.dist || 1e-6);
+      const nx = (car.x - pr.px) * inv, nz = (car.z - pr.pz) * inv; // outward normal
+      car.x = pr.px + nx * limit;
+      car.z = pr.pz + nz * limit;
+      const vN = car.vx * nx + car.vz * nz;
+      if (vN > 0) {
+        car.vx -= nx * vN * 1.35; // bounce (restitution 0.35)
+        car.vz -= nz * vN * 1.35;
+        car.vx *= 0.93; // scrape
+        car.vz *= 0.93;
+        car.wallHit = vN;
+        // Glancing hits twist the car: torque scales with how off-axis the
+        // contact is (zero for a square head-on, max for a shallow scrape),
+        // rotating the nose away from the wall.
+        const offAxis = fz * nx - fx * nz;
+        car.yawVel += clamp(-offAxis * Math.min(vN, 16) * 0.09, -1.4, 1.4);
+        // Truly violent wall hits flip the car over.
+        if (vN > TUMBLE_WALL_HIT) {
+          startTumble(car, (vN - TUMBLE_WALL_HIT) / 15, offAxis >= 0 ? 1 : -1);
+        }
       }
     }
+  } else if (car.offTrack && pr.dist <= limit && car.y <= roadY + WALL_HEIGHT) {
+    car.offTrack = false; // threaded it back over the wall — lucky save
   }
 
   // --- Placed obstacles (walls/blocks): capsule segments. Low walls can be
@@ -327,9 +357,11 @@ export function stepCar(car, input, dt, track) {
       car.z = cz + oz * minD;
       const vN = car.vx * ox + car.vz * oz;
       if (vN < 0) {
-        car.vx -= ox * vN * 1.35;
-        car.vz -= oz * vN * 1.35;
-        car.vx *= 0.93; car.vz *= 0.93;
+        // Tire stacks and posts ABSORB the hit (barely any rebound) — they
+        // arrest you rather than bounce you back across the road.
+        car.vx -= ox * vN * 1.12;
+        car.vz -= oz * vN * 1.12;
+        car.vx *= 0.9; car.vz *= 0.9;
         car.wallHit = Math.max(car.wallHit, -vN);
         const offAxis = fz * ox - fx * oz;
         car.yawVel += clamp(-offAxis * Math.min(-vN, 16) * 0.09, -1.4, 1.4);
@@ -347,7 +379,7 @@ export function stepCar(car, input, dt, track) {
   car.lat = pr.lat ?? 0;
 
   // --- Vertical: follow the road, launch off crests, land ---
-  const groundY = track.groundAt ? track.groundAt(car.x, car.z, pr.index) : 0;
+  const groundY = car.offTrack ? 0 : (track.groundAt ? track.groundAt(car.x, car.z, pr.index) : 0);
   car.landed = 0;
   if (car.grounded) {
     const reqVy = (groundY - car.y) / dt;
@@ -374,8 +406,10 @@ export function stepCar(car, input, dt, track) {
       } else {
         car.vy = 0;
         car.grounded = true;
-        // Brutal or sideways landings roll the car.
-        if (car.landed > TUMBLE_LANDING
+        // Landing OFF the road is always a crash — tumble, then respawn.
+        if (car.offTrack) {
+          startTumble(car, clamp(car.landed / 30, 0.4, 1), vL >= 0 ? 1 : -1);
+        } else if (car.landed > TUMBLE_LANDING
           || (car.landed > TUMBLE_SIDE_LANDING && Math.abs(vL) > 12)) {
           startTumble(car, car.landed / 40, vL >= 0 ? 1 : -1);
         }
@@ -425,8 +459,11 @@ export function collideCars(a, b, moveBoth) {
 
   const relN = (a.vx - b.vx) * nx + (a.vz - b.vz) * nz;
   if (relN <= 0) return 0; // already separating
-  // Low-speed contact is INELASTIC (lean/push); only real hits bounce.
-  const e = clamp((relN - 6) / 25, 0, 0.6);
+  // Car contact is (nearly) INELASTIC: a rear-end at +5 closing SHOVES the
+  // car ahead — equal-mass momentum transfer, both leave at the average
+  // speed — instead of ping-ponging apart. A whisper of restitution remains
+  // only for truly violent hits so wrecks still read as impacts.
+  const e = clamp((relN - 14) / 40, 0, 0.15);
   const j = (1 + e) * relN / 2;
   a.vx -= nx * j; a.vz -= nz * j;
   if (moveBoth) { b.vx += nx * j; b.vz += nz * j; }

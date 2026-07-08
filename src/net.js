@@ -1,9 +1,12 @@
 // P2P networking via Trystero: WebRTC data channels, signaling over public
-// Nostr relays — no game server anywhere.
+// MQTT brokers — no game server anywhere. (Switched from the Nostr strategy:
+// volunteer Nostr relays proved flaky — some ack publishes but never forward
+// the ephemeral SDP events, silently killing the WebRTC handshake. The MQTT
+// brokers are commercially operated and reliable.)
 //
 // Trystero 0.25 API: makeAction(name, {onMessage}) returns {send}, and
 // onPeerJoin/onPeerLeave are assignable properties on the room.
-import { joinRoom, selfId } from 'trystero';
+import { joinRoom, selfId } from '@trystero-p2p/mqtt';
 
 export { selfId };
 
@@ -17,8 +20,12 @@ export class Net {
     this.handlers = handlers;
     this.peers = new Map(); // id -> { profile, state, stateAt }
 
-    // Extra STUN diversity helps NAT traversal; TURN (for strict/symmetric
-    // NATs) needs a credential server — pending a Cloudflare TURN key.
+    // STUN diversity helps NAT traversal. KNOWN GAP: peers behind the SAME
+    // NAT (e.g. two tabs on one machine) often can't connect — Chrome masks
+    // host candidates behind mDNS (.local) which may not resolve, and
+    // reflexive candidates need router hairpinning. The fix is a TURN relay
+    // (needs credentials — e.g. a Cloudflare or metered.ca key); free
+    // anonymous TURN services no longer exist.
     this.room = joinRoom({
       appId: APP_ID,
       rtcConfig: {

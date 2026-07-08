@@ -192,9 +192,11 @@ export function buildTrackGeometry(def, seed = 1) {
   // arches & pylons are visual only. dir defaults to local track flow.
   const DECOR_DEFAULTS = {
     wall: { len: 30, h: 3 },
-    block: { len: 14, h: 10 },
+    block: { len: 4.5, h: 3.4 }, // tire stack: real-world scale next to a ~4u car
     arch: { len: 0, h: 11 }, // len 0 = auto span (road width + margin)
     pylon: { len: 0, h: 8 },
+    building: { len: 26, h: 0 },  // height comes from floors
+    billboard: { len: 14, h: 9 }, // h = pole height
   };
   const decor = [];
   for (const d of def.decor ?? []) {
@@ -212,14 +214,42 @@ export function buildTrackGeometry(def, seed = 1) {
       type: d.type, x: d.at[0], z: d.at[1], fx, fz,
       len: d.len ?? (dd.len || widthAt(pr.index) + 10),
       h: d.h ?? dd.h,
-      // grounded at the actual surface under the object (slopes, ramps)
-      baseY: groundAt(d.at[0], d.at[1], pr.index), index: pr.index,
+      // building/billboard extras: footprint depth, floor count, palette
+      dep: d.dep, floors: d.floors ?? 8, neon: d.neon ?? 0,
+      // Trackside props (walls/blocks/…) ride the driving surface so they sit
+      // on elevated road; buildings and billboards are scenery on the world
+      // floor — never lifted with a nearby raised track.
+      baseY: (d.type === 'building' || d.type === 'billboard')
+        ? 0 : groundAt(d.at[0], d.at[1], pr.index),
+      index: pr.index,
     });
   }
-  // Physical colliders: capsule segments (a block is a short fat one).
+  // Physical colliders: capsule segments. Blocks (tire stacks) and pylons
+  // are ROUND — zero-length capsules — matching what's drawn; walls stay
+  // long and thin; a building is a fat capsule spanning its long axis.
+  // Arches and billboards are pass-through.
   const obstacles = decor
-    .filter((d) => d.type === 'wall' || d.type === 'block')
-    .map((d) => ({ ...d, thick: d.type === 'block' ? d.len / 2 : 1.2 }));
+    .filter((d) => d.type === 'wall' || d.type === 'block' || d.type === 'pylon' || d.type === 'building')
+    .map((d) => {
+      if (d.type === 'building') {
+        const w = d.len, dep = d.dep ?? d.len;
+        // capsule along the longer footprint axis (across dir = width)
+        const alongWidth = w >= dep;
+        const px = -d.fz, pz = d.fx;
+        return {
+          ...d,
+          fx: alongWidth ? px : d.fx, fz: alongWidth ? pz : d.fz,
+          len: Math.max(w, dep) - Math.min(w, dep),
+          thick: Math.min(w, dep) / 2,
+          h: (d.floors ?? 8) * 3.1,
+        };
+      }
+      return {
+        ...d,
+        len: d.type === 'wall' ? d.len : 0,
+        thick: d.type === 'block' ? d.len / 2 : d.type === 'pylon' ? 1.5 : 1.2,
+      };
+    });
 
   // Height contributed by ramps at a world position (null off-ramp).
   function rampHeightAt(x, z) {
@@ -258,8 +288,11 @@ export function buildTrackGeometry(def, seed = 1) {
   }
 
   // Same-level branch proximity (at-grade intersections): barrier walls open
-  // there. Vertically separated branches (overpass) keep walls.
+  // there. Vertically separated branches (overpass) keep walls — and the
+  // LOWER branch gets an `overhead` flag (a deck covers it), which the game
+  // uses to show the x-ray car outline under bridges.
   const crossing = new Array(SAMPLES).fill(false);
+  const overhead = new Array(SAMPLES).fill(false);
   const guard = Math.ceil((Math.max(...widths) * 1.6) / segLen);
   for (let i = 0; i < SAMPLES; i++) {
     for (let j = 0; j < SAMPLES; j++) {
@@ -268,16 +301,16 @@ export function buildTrackGeometry(def, seed = 1) {
       const a = points[i], b = points[j];
       const dxz = (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
       const reach = (widths[i] + widths[j]) / 2 * 1.15;
-      if (dxz < reach * reach && Math.abs(a.y - b.y) < 4) {
-        crossing[i] = true;
-        break;
-      }
+      if (dxz < reach * reach && Math.abs(a.y - b.y) < 4) crossing[i] = true;
+      const deckReach = widths[j] / 2 + 2;
+      if (b.y - a.y >= 4 && dxz < deckReach * deckReach) overhead[i] = true;
+      if (crossing[i] && overhead[i]) break;
     }
   }
 
   return {
     def, seed, curve, length, segLen,
-    sampleCount: SAMPLES, points, tangents, widths, heights, ramps, crossing,
+    sampleCount: SAMPLES, points, tangents, widths, heights, ramps, crossing, overhead,
     decor, obstacles,
     probe, normalAt, sideOffset, clampLat, widthAt, halfWidthAt, heightAt, rampHeightAt, groundAt,
     maxWidth: Math.max(...widths),

@@ -23,6 +23,7 @@ export class Track {
     this.decor = g.decor;
     this.obstacles = g.obstacles; // physics reads these — walls/blocks collide
     this.crossing = g.crossing;
+    this.overhead = g.overhead;
     this.maxWidth = g.maxWidth;
     this.halfWidth = g.maxWidth / 2; // fallback only; use halfWidthAt
     this.probe = g.probe;
@@ -83,7 +84,6 @@ export class Track {
         #include <fog_pars_vertex>
         uniform sampler2D tMask;
         uniform float uLift;
-        attribute vec2 aCell; // world-space center of this quad's grid cell
         varying vec2 vP;
         varying vec3 vW;
         varying float vH;
@@ -91,11 +91,12 @@ export class Track {
         void main() {
           vec4 wp = modelMatrix * vec4(position, 1.0);
           vP = wp.xz;
-          // Waves sampled ONCE per cell in the VERTEX shader — the fragment
-          // used to recompute this per PIXEL (millions of sin() calls/frame).
-          vec3 w = waves(aCell);
+          // Waves sampled per VERTEX: neighboring tiles share corner
+          // positions, so the sheet stays CONTINUOUS — stepped per-tile lift
+          // left slits between tiles and parallax-broke the net pattern.
+          vec3 w = waves(wp.xz);
           vW = w;
-          float open = texture2D(tMask, (aCell + ${GROUND / 2}.0) / ${GROUND}.0).r; // 0 near the road
+          float open = texture2D(tMask, (wp.xz + ${GROUND / 2}.0) / ${GROUND}.0).r; // 0 near the road
           vH = min(w.x + w.y * 0.9 + w.z * 0.8, 1.45) * open; // capped: no stacked towers
           wp.y += vH * uLift;
           vec4 mvPosition = viewMatrix * wp;
@@ -120,16 +121,22 @@ export class Track {
           vec3 glow = vec3(0.13, 0.90, 1.00) * w.x * 1.1
                     + vec3(1.00, 0.18, 0.60) * w.y * 0.9
                     + vec3(1.00, 0.77, 0.30) * w.z * 0.4;
-          // Raised tiles shine: height brightens them so the steps read from
-          // straight above, not just by parallax.
-          float lift = clamp(vH * 0.55, 0.0, 1.4);
-          col += line * (vec3(0.055, 0.07, 0.12) + glow + vec3(0.10, 0.16, 0.26) * lift);
-          col += (glow + vec3(0.06, 0.09, 0.15) * lift) * 0.05; // tile faces glow faintly too
+          // Raised net shines with height — kept modest so an overlapping
+          // wave crest can't stack into a blown-out white patch.
+          float lift = clamp(vH * 0.45, 0.0, 1.0);
+          col += line * (vec3(0.055, 0.07, 0.12) + min(glow, vec3(0.85)) + vec3(0.07, 0.11, 0.18) * lift);
+          col += (min(glow, vec3(0.85)) + vec3(0.05, 0.08, 0.13) * lift) * 0.05;
           gl_FragColor = vec4(col, 1.0);
           #include <fog_fragment>
         }`,
     });
-    this.groundMat.uniforms.tMask.value = makeLiftMask(this.points, this.maxWidth);
+    // Editor-placed buildings and billboards pin the wave net flat beneath
+    // themselves — they sit on the world floor, so a wave crest would
+    // otherwise swallow them.
+    const bldgSpots = this.geom.decor
+      .filter((d) => d.type === 'building' || d.type === 'billboard')
+      .map((d) => ({ x: d.x, z: d.z, r: Math.max(d.len, d.dep ?? d.len) / 2 }));
+    this.groundMat.uniforms.tMask.value = makeLiftMask(this.points, this.maxWidth, bldgSpots);
     // Chunked ground: 100 meshes instead of one 540k-vert monolith, so
     // frustum culling drops ~85% of the net outside the camera every frame.
     for (const geo of buildGroundChunks()) {
@@ -147,15 +154,18 @@ export class Track {
     group.add(this.wall(1, 0x22e6ff));
     group.add(this.wall(-1, 0xff2d9a));
 
-    // Dashed centerline + supports under elevated sections.
-    group.add(this.dashes());
+    // Centerline direction chevrons (chase-animated in tick) + supports.
+    this.arrowsMesh = this.dashes();
+    group.add(this.arrowsMesh);
     group.add(this.pillars());
 
     // Jump ramps — unmissable amber wedges.
     for (const r of this.ramps) group.add(buildRampMesh(r));
 
-    // Placed decorations (walls, arches, pylons, blocks).
-    for (const d of this.geom.decor) group.add(buildDecorMesh(d));
+    // Placed decorations (walls, arches, pylons, blocks, buildings, signs).
+    this.decorTickers = [];
+    for (const d of this.geom.decor) group.add(buildDecorMesh(d, this.decorTickers));
+
 
     // Start/finish gate: checker strip + two pylons.
     const start = this.points[0];
@@ -234,7 +244,7 @@ export class Track {
   // Vertical glowing barrier ribbon along one edge (side: 1 = left/outer).
   wall(side, color) {
     const pos = [], idx = [];
-    const H = 1.5;
+    const H = 2.2; // matches physics WALL_HEIGHT — clear this and you are OFF
     const E = this.edgePoints((j) => side * (this.widthAt(j) / 2 + 0.4));
     for (let i = 0; i <= SAMPLES; i++) {
       const j = i % SAMPLES;
@@ -278,21 +288,26 @@ export class Track {
     }));
   }
 
+  // Neon chevrons down the centerline, pointing along the direction of
+  // travel — replaces the old grey lane dashes.
   dashes() {
-    const geo = new THREE.PlaneGeometry(0.5, 2.4);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x596175 });
-    const count = Math.floor(SAMPLES / 12);
+    const geo = new THREE.PlaneGeometry(3.4, 2.7);
+    const mat = new THREE.MeshBasicMaterial({
+      map: makeNeonArrowTexture(), transparent: true, opacity: 0.8,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const count = Math.floor(SAMPLES / 10);
     const mesh = new THREE.InstancedMesh(geo, mat, count);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const eul = new THREE.Euler();
     for (let k = 0; k < count; k++) {
-      const i = k * 12;
+      const i = k * 10;
       const p = this.points[i];
       const t = this.tangents[i];
-      eul.set(-Math.PI / 2, 0, Math.atan2(t.x, t.z));
+      eul.set(-Math.PI / 2, 0, Math.atan2(t.x, t.z) + Math.PI);
       q.setFromEuler(eul);
-      m.compose(new THREE.Vector3(p.x, p.y + 0.02, p.z), q, new THREE.Vector3(1, 1, 1));
+      m.compose(new THREE.Vector3(p.x, p.y + 0.04, p.z), q, new THREE.Vector3(1, 1, 1));
       mesh.setMatrixAt(k, m);
     }
     return mesh;
@@ -303,22 +318,58 @@ export class Track {
     const group = new THREE.Group();
     const mat = new THREE.MeshBasicMaterial({ color: 0x1e2436 });
     const glowMat = new THREE.MeshBasicMaterial({ color: 0x22e6ff });
+    // A pillar may not impale a LOWER stretch of road passing beneath
+    // (bridges): skip supports whose footprint lands on another section.
+    const guard = Math.ceil((this.maxWidth * 1.6) / (this.length / SAMPLES));
+    const overRoad = (i, p) => {
+      for (let j = 0; j < SAMPLES; j += 4) {
+        const w = Math.min(Math.abs(j - i), SAMPLES - Math.abs(j - i));
+        if (w < guard) continue;
+        const q = this.points[j];
+        if (q.y > p.y - 2) continue;
+        const dx = q.x - p.x, dz = q.z - p.z;
+        const reach = this.geom.widths[j] / 2 + 2.5;
+        if (dx * dx + dz * dz < reach * reach) return true;
+      }
+      return false;
+    };
     for (let i = 0; i < SAMPLES; i += 24) {
       const p = this.points[i];
       if (p.y < 3) continue;
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.4, p.y, 8), mat);
-      col.position.set(p.x, p.y / 2, p.z);
+      if (overRoad(i, p)) continue;
+      // Stop BELOW the deck: a pillar reaching exactly p.y pokes its dark
+      // top cap through the road wherever the surface interpolates lower.
+      const h = p.y - 1.4;
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.4, h, 8), mat);
+      col.position.set(p.x, h / 2, p.z);
       group.add(col);
-      const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, p.y, 6), glowMat);
-      stripe.position.set(p.x + 1.2, p.y / 2, p.z);
+      const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, h, 6), glowMat);
+      stripe.position.set(p.x + 1.2, h / 2, p.z);
       group.add(stripe);
     }
     return group;
   }
 
-  // Advance the animated ground waves; called from the game loop.
+  // Advance the animated ground waves + the arrow chase; called per frame.
   tick(t) {
     if (this.groundMat) this.groundMat.uniforms.uTime.value = t;
+    for (const f of this.decorTickers ?? []) f(t);
+    if (this.arrowsMesh) {
+      // Chase pulse: a brightness wave runs DOWN the track (back → front),
+      // underlining the direction of travel like runway lights.
+      const mesh = this.arrowsMesh;
+      const pulses = Math.max(6, Math.round(mesh.count / 7));
+      this._arrowCol ??= new THREE.Color();
+      for (let k = 0; k < mesh.count; k++) {
+        const u = (k * 10) / SAMPLES;
+        let ph = (u * pulses - t * 1.1) % 1;
+        if (ph < 0) ph += 1;
+        const d = ph < 0.5 ? ph : 1 - ph;
+        const b = 0.35 + 1.0 * Math.exp(-(d * d) / 0.011);
+        mesh.setColorAt(k, this._arrowCol.setRGB(b, b, b));
+      }
+      mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   // Staggered grid slot behind the start line. Returns pose + progress offset.
@@ -382,7 +433,10 @@ function buildRampMesh(r) {
 
 // Placed decor meshes. Walls/blocks are the physical ones (physics uses the
 // matching capsule in trackgeom); arches and pylons are pure set dressing.
-function buildDecorMesh(d) {
+// Tire thickness: scale with stack height so short stacks aren't pancakes.
+function clampTire(h) { return Math.min(2.6, Math.max(1.5, h / 4)); }
+
+function buildDecorMesh(d, tickers = null) {
   const group = new THREE.Group();
   const px = -d.fz, pz = d.fx; // left perp of dir
   const neonCyan = new THREE.MeshBasicMaterial({ color: 0x22e6ff });
@@ -399,17 +453,28 @@ function buildDecorMesh(d) {
     strip.rotation.y = Math.atan2(d.fx, d.fz);
     group.add(strip);
   } else if (d.type === 'block') {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(d.len, d.h, d.len), dark);
-    body.position.set(d.x, d.baseY + d.h / 2, d.z);
-    body.rotation.y = Math.atan2(d.fx, d.fz);
-    group.add(body);
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(d.len, d.h, d.len)),
-      new THREE.LineBasicMaterial({ color: 0xa85cff }),
+    // Tire stack — the classic circuit-side barrier (and it matches the
+    // round collider). Rubber rings with a neon top ring for night visibility.
+    const R = d.len / 2;
+    const tireH = clampTire(d.h);
+    const n = Math.max(2, Math.round(d.h / tireH));
+    const tube = tireH / 2;
+    const geo = new THREE.TorusGeometry(Math.max(R - tube, tube), tube, 10, 22);
+    const rubber = new THREE.MeshLambertMaterial({ color: 0x232a3a });
+    const rubberDark = new THREE.MeshLambertMaterial({ color: 0x171d2b });
+    for (let i = 0; i < n; i++) {
+      const tire = new THREE.Mesh(geo, i % 2 ? rubberDark : rubber);
+      tire.rotation.x = Math.PI / 2;
+      tire.position.set(d.x, d.baseY + tube + i * tireH, d.z);
+      group.add(tire);
+    }
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(Math.max(R - tube, tube), 0.22, 6, 22),
+      new THREE.MeshBasicMaterial({ color: 0xa85cff }),
     );
-    edges.position.copy(body.position);
-    edges.rotation.y = body.rotation.y;
-    group.add(edges);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(d.x, d.baseY + n * tireH - 0.1, d.z);
+    group.add(ring);
   } else if (d.type === 'arch') {
     // Gate ACROSS the dir: pillars either side, glowing beam over the top.
     const half = d.len / 2;
@@ -436,8 +501,53 @@ function buildDecorMesh(d) {
     const tip = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 8), neonMagenta);
     tip.position.set(d.x, d.baseY + d.h + 0.6, d.z);
     group.add(tip);
+  } else if (d.type === 'building') {
+    // Neon tower: floors × window rows on the sides, dark roof with a neon
+    // trim ring. Width/depth/floors/palette all come from the editor.
+    const w = d.len, dep = d.dep ?? d.len;
+    const floors = Math.max(1, Math.round(d.floors ?? 8));
+    const h = floors * 3.1;
+    const cols = Math.max(2, Math.round(w / 4.5));
+    const atlas = makeLivingBuildingAtlas(d.neon ?? 0, Math.min(floors, 34), cols);
+    if (tickers) tickers.push(atlas.tick);
+    const bldg = new THREE.Mesh(makeBuildingGeo(), new THREE.MeshBasicMaterial({ map: atlas.tex }));
+    bldg.scale.set(w, h, dep);
+    bldg.position.set(d.x, d.baseY + h / 2 - 0.05, d.z);
+    bldg.rotation.y = Math.atan2(d.fx, d.fz);
+    group.add(bldg);
+  } else if (d.type === 'billboard') {
+    // Glowing road sign: pole + straight vertical panel facing along the
+    // local flow (drivers see it coming).
+    const rng = mulberry32(Math.abs(Math.round(d.x * 31 + d.z * 7)) + 1);
+    const pw = d.len, ph = Math.max(4, d.len * 0.45);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, d.h, 8), dark);
+    pole.position.set(d.x, d.baseY + d.h / 2, d.z);
+    group.add(pole);
+    const face = new THREE.MeshBasicMaterial({ map: makeBillboardTexture(rng, d.neon) });
+    const panel = new THREE.Mesh(
+      new THREE.BoxGeometry(pw, ph, 0.6),
+      [dark, dark, dark, dark, face, face],
+    );
+    panel.position.set(d.x, d.baseY + d.h + ph / 2 - 0.6, d.z);
+    panel.rotation.y = Math.atan2(d.fx, d.fz);
+    group.add(panel);
   }
   return group;
+}
+
+// Unit box with per-face UVs into the building atlas: sides = windows,
+// top-right of the atlas = roof trim, bottom-right = dark underside.
+function makeBuildingGeo() {
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < 24; i++) {
+    const u = uv.getX(i), v = uv.getY(i);
+    if (i >= 8 && i < 12) uv.setXY(i, 0.765 + u * 0.225, 0.01 + v * 0.225);        // roof
+    else if (i >= 12 && i < 16) uv.setXY(i, 0.765 + u * 0.225, 0.765 + v * 0.225); // underside
+    else uv.setXY(i, u * 0.74, v);                                                 // window walls
+  }
+  geo.clearGroups();
+  return geo;
 }
 
 // Chunked disconnected-quads ground: every TILE cell owns its 6 vertices
@@ -483,7 +593,7 @@ function buildGroundChunks() {
 
 // Track-proximity mask for the wave lift: white = open field (full lift),
 // black band along the road so the net stays flat where people drive.
-function makeLiftMask(points, maxWidth) {
+function makeLiftMask(points, maxWidth, spots = []) {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const g = c.getContext('2d');
@@ -502,9 +612,139 @@ function makeLiftMask(points, maxWidth) {
   g.closePath();
   g.stroke();
   g.filter = 'none';
+  // Buildings pin the net flat beneath them — waves must not lift ground
+  // tiles through a tower.
+  g.fillStyle = '#000';
+  for (const b of spots) {
+    g.beginPath();
+    g.arc((b.x + off) * s, (b.z + off) * s, Math.max(2, (b.r + 12) * s), 0, Math.PI * 2);
+    g.fill();
+  }
   const tex = new THREE.CanvasTexture(c);
   tex.flipY = false; // sampled with world-derived UVs, no flip
   return tex;
+}
+
+// ---- Neon city textures (canvas-painted, one per palette variant) ----
+const CITY_PALETTES = ['#5fe8ff', '#ff5fae', '#ffd27a', '#b6ff3d', '#b07aff', '#ff6a5c', '#dcefff'];
+
+// Living building atlas: sides = windows (left 74%), roof trim bottom-right,
+// dark underside top-right. Windows toggle and shimmer over time — call
+// .tick(t) from the game loop.
+function makeLivingBuildingAtlas(variant, rows = 11, cols = 5) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const lit = CITY_PALETTES[variant % CITY_PALETTES.length];
+  const cw = 190 / cols, ch = size / rows;
+  const on = [], alpha = [];
+  for (let i = 0; i < rows * cols; i++) {
+    on.push(Math.random() < 0.34);
+    alpha.push(0.35 + Math.random() * 0.3);
+  }
+  // static parts: background + roof trim (bottom-right under flipY)
+  g.fillStyle = '#0a0d16';
+  g.fillRect(0, 0, size, size);
+  g.strokeStyle = lit;
+  g.globalAlpha = 0.65;
+  g.lineWidth = 2;
+  g.shadowColor = lit;
+  g.shadowBlur = 3;
+  g.strokeRect(198, 198, 52, 52);
+  g.shadowBlur = 0;
+  g.globalAlpha = 1;
+  const paint = () => {
+    g.globalAlpha = 1;
+    g.shadowBlur = 0;
+    g.fillStyle = '#0a0d16';
+    g.fillRect(0, 0, 192, size);
+    for (let r = 0; r < rows; r++) {
+      for (let col = 0; col < cols; col++) {
+        const i = r * cols + col;
+        g.shadowBlur = on[i] ? 2.5 : 0;
+        g.shadowColor = lit;
+        g.fillStyle = on[i] ? lit : '#131a29';
+        g.globalAlpha = on[i] ? alpha[i] : 1;
+        g.fillRect(col * cw + cw * 0.22, r * ch + ch * 0.25, cw * 0.56, ch * 0.5);
+      }
+    }
+    g.globalAlpha = 1;
+    g.shadowBlur = 0;
+  };
+  paint();
+  const tex = new THREE.CanvasTexture(c);
+  let next = 0;
+  return {
+    tex,
+    tick(t) {
+      if (t < next) return;
+      next = t + 0.35 + Math.random() * 0.6;
+      // someone turns a light on, someone turns one off; lit ones shimmer
+      for (let k = 0; k < 2; k++) {
+        const i = Math.floor(Math.random() * on.length);
+        if (Math.random() < 0.55) on[i] = !on[i];
+        alpha[i] = 0.35 + Math.random() * 0.3;
+      }
+      paint();
+      tex.needsUpdate = true;
+    },
+  };
+}
+
+// Glowing sign faces: big neon word, framed.
+const BILLBOARD_WORDS = ['DRIFT', 'ネオン', 'TURBO', 'APEX', '夜遊び', 'VOLT', 'NITRO', 'GRIP', '88', 'ドリフト'];
+function makeBillboardTexture(rng, neon = null) {
+  const w = 256, h = 128;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#07090f';
+  g.fillRect(0, 0, w, h);
+  const color = CITY_PALETTES[(neon ?? Math.floor(rng() * CITY_PALETTES.length)) % CITY_PALETTES.length];
+  const word = BILLBOARD_WORDS[Math.floor(rng() * BILLBOARD_WORDS.length)];
+  g.strokeStyle = color;
+  g.lineWidth = 5;
+  g.shadowColor = color;
+  g.shadowBlur = 12;
+  g.strokeRect(8, 8, w - 16, h - 16);
+  g.font = 'italic 900 52px "Avenir Next", "Segoe UI", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.shadowBlur = 22;
+  g.fillStyle = color;
+  g.fillText(word, w / 2, h / 2 + 2, w - 44);
+  g.shadowBlur = 0;
+  return new THREE.CanvasTexture(c);
+}
+
+// Glowing cyan chevron on transparent — additive-blended it reads as neon.
+function makeNeonArrowTexture() {
+  const s = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+  const chevron = () => {
+    g.beginPath();
+    g.moveTo(24, 86);
+    g.lineTo(s / 2, 42);
+    g.lineTo(s - 24, 86);
+    g.stroke();
+  };
+  // glow halo (double-struck), then hot core
+  g.strokeStyle = 'rgba(34,230,255,0.8)';
+  g.lineWidth = 13;
+  g.shadowColor = 'rgba(34,230,255,0.95)';
+  g.shadowBlur = 16;
+  chevron();
+  chevron();
+  g.shadowBlur = 0;
+  g.strokeStyle = '#eafcff';
+  g.lineWidth = 4.5;
+  chevron();
+  return new THREE.CanvasTexture(c);
 }
 
 function makeChevronTexture() {

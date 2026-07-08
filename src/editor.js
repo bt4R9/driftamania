@@ -109,16 +109,61 @@ function refreshMarkers() {
     m.userData = { type: 'point', i };
     markerGroup.add(m);
   });
-  const DECOR_COLORS = { wall: 0xff5c5c, block: 0xa85cff, arch: 0x22e6ff, pylon: 0xe8eaf0 };
+  const DECOR_COLORS = { wall: 0xff5c5c, block: 0xa85cff, arch: 0x22e6ff, pylon: 0xe8eaf0, building: 0x7fb4ff, billboard: 0xffd27a };
+  const DECOR_LEN = { wall: 30, block: 4.5, arch: 46, pylon: 3, building: 26, billboard: 14 };
   (def.decor ?? []).forEach((d, i) => {
     const isSel = selected?.type === 'decor' && selected.i === i;
-    const m = new THREE.Mesh(
-      new THREE.BoxGeometry(isSel ? 13 : 9, 3, isSel ? 13 : 9),
-      new THREE.MeshBasicMaterial({ color: isSel ? 0xffffff : DECOR_COLORS[d.type] ?? 0x888888 }),
+    const color = isSel ? 0xffffff : DECOR_COLORS[d.type] ?? 0x888888;
+    let groundY = 0;
+    // Buildings/billboards sit on the world floor (never lifted with the road).
+    if (d.type !== 'building' && d.type !== 'billboard') {
+      try { groundY = track.groundAt(d.at[0], d.at[1], track.probe(d.at[0], d.at[1]).index); } catch { /* mid-edit geometry */ }
+    }
+    // TRUE-SIZE footprint outline: what you place is what you see.
+    const fpMat = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: isSel ? 0.85 : 0.5,
+      side: THREE.DoubleSide, depthTest: false,
+    });
+    const size = d.len ?? DECOR_LEN[d.type] ?? 10;
+    let fp;
+    if (d.type === 'block' || d.type === 'pylon') {
+      const r = d.type === 'block' ? size / 2 : 1.5;
+      fp = new THREE.Mesh(new THREE.RingGeometry(Math.max(r - 0.5, 0.3), r + 0.5, 28), fpMat);
+      fp.rotation.x = -Math.PI / 2;
+    } else if (d.type === 'building') {
+      // full w × depth footprint rectangle
+      fpMat.opacity = isSel ? 0.5 : 0.3;
+      fp = new THREE.Mesh(new THREE.PlaneGeometry(size, d.dep ?? size), fpMat);
+      fp.rotation.x = -Math.PI / 2;
+      let ang = 0;
+      try { const t = track.tangents[track.probe(d.at[0], d.at[1]).index]; ang = Math.atan2(t.x, t.z); } catch {}
+      if (d.dir != null) ang = (d.dir * Math.PI) / 180;
+      fp.rotation.z = ang;
+    } else {
+      // wall runs ALONG the local flow, arch spans ACROSS it
+      fp = new THREE.Mesh(new THREE.PlaneGeometry(2.6, size), fpMat);
+      fp.rotation.x = -Math.PI / 2;
+      let ang = 0;
+      try {
+        const t = track.tangents[track.probe(d.at[0], d.at[1]).index];
+        ang = Math.atan2(t.x, t.z);
+      } catch { /* fall back to north */ }
+      if (d.dir != null) ang = (d.dir * Math.PI) / 180;
+      if (d.type === 'arch' || d.type === 'billboard') ang += Math.PI / 2; // spans across the flow
+      fp.rotation.z = ang;
+    }
+    fp.position.set(d.at[0], groundY + 0.4, d.at[1]);
+    fp.renderOrder = 20;
+    fp.userData = { type: 'decor', i };
+    markerGroup.add(fp);
+    // small grab handle in the middle
+    const dot = new THREE.Mesh(
+      new THREE.BoxGeometry(isSel ? 5 : 3.5, 2, isSel ? 5 : 3.5),
+      new THREE.MeshBasicMaterial({ color }),
     );
-    m.position.set(d.at[0], 5, d.at[1]);
-    m.userData = { type: 'decor', i };
-    markerGroup.add(m);
+    dot.position.set(d.at[0], groundY + 1.6, d.at[1]);
+    dot.userData = { type: 'decor', i };
+    markerGroup.add(dot);
   });
   (def.ramps ?? []).forEach((r, i) => {
     const isSel = selected?.type === 'ramp' && selected.i === i;
@@ -190,6 +235,7 @@ function pointerWorld(e) {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button === 2) return; // right button = context menu, never drag/place
   if (e.clientX > innerWidth - 300) return;
   const w = pointerWorld(e);
   if (placingRamp) {
@@ -278,10 +324,12 @@ renderer.domElement.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 addEventListener('keydown', (e) => {
-  if (e.code === 'Delete' || e.code === 'Backspace') {
-    if (document.activeElement?.tagName === 'INPUT') return;
-    deleteSelected();
-  }
+  if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT') return;
+  if (e.code === 'Delete' || e.code === 'Backspace') deleteSelected();
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.code === 'KeyC') { copySelected(); e.preventDefault(); }
+  if (mod && e.code === 'KeyV') { pasteClipboard(); e.preventDefault(); }
+  if (mod && e.code === 'KeyD') { copySelected(); pasteClipboard(); e.preventDefault(); } // duplicate
 });
 
 function deleteSelected() {
@@ -292,6 +340,97 @@ function deleteSelected() {
   selected = null;
   scheduleRebuild(true);
 }
+
+// ---------- copy / paste (decor + ramps) ----------
+let clipboard = null; // { kind: 'decor' | 'ramp', data }
+
+function copySelected() {
+  if (!selected) return;
+  if (selected.type === 'decor') clipboard = { kind: 'decor', data: JSON.parse(JSON.stringify(def.decor[selected.i])) };
+  else if (selected.type === 'ramp') clipboard = { kind: 'ramp', data: JSON.parse(JSON.stringify(def.ramps[selected.i])) };
+}
+
+function pasteClipboard(at = null) {
+  if (!clipboard) return;
+  const copy = JSON.parse(JSON.stringify(clipboard.data));
+  if (clipboard.kind === 'decor') {
+    copy.at = at ?? [copy.at[0] + 12, copy.at[1] + 12]; // at cursor, or offset
+    def.decor = def.decor ?? [];
+    def.decor.push(copy);
+    selected = { type: 'decor', i: def.decor.length - 1 };
+  } else {
+    copy.near = at ?? [copy.near[0] + 12, copy.near[1] + 12];
+    def.ramps = def.ramps ?? [];
+    def.ramps.push(copy);
+    selected = { type: 'ramp', i: def.ramps.length - 1 };
+  }
+  scheduleRebuild(true);
+}
+
+// ---------- right-click context menu ----------
+const ctxMenu = document.createElement('div');
+ctxMenu.style.cssText = 'position:fixed;display:none;z-index:50;background:rgba(10,12,20,0.95);'
+  + 'border:1px solid #1d2334;border-radius:8px;padding:4px;min-width:140px;'
+  + 'backdrop-filter:blur(6px);box-shadow:0 10px 34px rgba(0,0,0,.55)';
+document.body.appendChild(ctxMenu);
+const hideCtx = () => { ctxMenu.style.display = 'none'; };
+addEventListener('pointerdown', (e) => {
+  // right-button presses belong to the SAME gesture that opens the menu —
+  // only a left/middle click elsewhere dismisses it
+  if (e.button === 2 || ctxMenu.contains(e.target)) return;
+  hideCtx();
+});
+addEventListener('keydown', (e) => { if (e.code === 'Escape') hideCtx(); });
+
+function showCtx(x, y, items) {
+  ctxMenu.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.textContent = it.label;
+    row.style.cssText = 'padding:6px 12px;font-size:12px;letter-spacing:1px;border-radius:6px;'
+      + 'cursor:pointer;color:' + (it.danger ? '#ff4d4d' : '#e8eaf0');
+    row.onmouseenter = () => { row.style.background = '#1a2233'; };
+    row.onmouseleave = () => { row.style.background = 'transparent'; };
+    row.onpointerdown = (ev) => ev.stopPropagation();
+    row.onclick = () => { hideCtx(); it.fn(); };
+    ctxMenu.appendChild(row);
+  }
+  ctxMenu.style.left = Math.min(x, innerWidth - 170) + 'px';
+  ctxMenu.style.top = Math.min(y, innerHeight - items.length * 34 - 14) + 'px';
+  ctxMenu.style.display = 'block';
+}
+
+renderer.domElement.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (e.clientX > innerWidth - 300) return;
+  const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObjects(markerGroup.children)[0];
+  const w = pointerWorld(e);
+  if (hit && hit.object.userData.type !== 'point') {
+    selected = { ...hit.object.userData };
+    refreshMarkers();
+    refreshPanel();
+    const what = selected.type === 'ramp' ? 'ramp' : def.decor[selected.i]?.type ?? 'object';
+    showCtx(e.clientX, e.clientY, [
+      { label: 'Copy ' + what, fn: copySelected },
+      { label: 'Duplicate', fn: () => { copySelected(); pasteClipboard(); } },
+      { label: 'Delete', fn: deleteSelected, danger: true },
+    ]);
+  } else if (hit && hit.object.userData.type === 'point') {
+    selected = { ...hit.object.userData };
+    refreshMarkers();
+    refreshPanel();
+    showCtx(e.clientX, e.clientY, [
+      { label: 'Delete point', fn: deleteSelected, danger: true },
+    ]);
+  } else if (clipboard) {
+    const what = clipboard.kind === 'ramp' ? 'ramp' : clipboard.data.type;
+    showCtx(e.clientX, e.clientY, [
+      { label: 'Paste ' + what + ' here', fn: () => pasteClipboard([Math.round(w.x), Math.round(w.z)]) },
+    ]);
+  }
+});
 
 // ---------- panel ----------
 function refreshPanel() {
@@ -329,10 +468,20 @@ function refreshPanel() {
   if (isDecor) {
     const d = def.decor[selected.i];
     $('d-type').textContent = d.type.toUpperCase();
-    const defaults = { wall: [30, 3], block: [14, 10], arch: [46, 11], pylon: [0, 8] };
+    const defaults = { wall: [30, 3], block: [4.5, 3.4], arch: [46, 11], pylon: [0, 8], building: [26, 0], billboard: [14, 9] };
+    const isB = d.type === 'building';
     $('d-len-row').style.display = d.type === 'pylon' ? 'none' : 'flex';
     $('d-len').value = d.len ?? defaults[d.type][0];
+    $('d-h-row').style.display = isB ? 'none' : 'flex';
     $('d-h').value = d.h ?? defaults[d.type][1];
+    $('d-dep-row').style.display = isB ? 'flex' : 'none';
+    $('d-floors-row').style.display = isB ? 'flex' : 'none';
+    $('d-neon-row').style.display = (isB || d.type === 'billboard') ? 'flex' : 'none';
+    if (isB) {
+      $('d-dep').value = d.dep ?? d.len ?? 26;
+      $('d-floors').value = d.floors ?? 8;
+    }
+    if (isB || d.type === 'billboard') $('d-neon').value = String(d.neon ?? 0);
     $('d-dir-mode').value = d.dir != null ? 'manual' : 'auto';
     $('d-dir-row').style.display = d.dir != null ? 'flex' : 'none';
     if (d.dir != null) $('d-dir').value = d.dir;
@@ -384,6 +533,7 @@ $('p-insert').onclick = () => {
 };
 $('p-delete').onclick = deleteSelected;
 $('r-delete').onclick = deleteSelected;
+$('r-dup').onclick = () => { copySelected(); pasteClipboard(); };
 $('r-len').oninput = (e) => { if (selected?.type === 'ramp') { def.ramps[selected.i].len = +e.target.value || 30; scheduleRebuild(); } };
 $('r-h').oninput = (e) => { if (selected?.type === 'ramp') { def.ramps[selected.i].h = +e.target.value || 6; scheduleRebuild(); } };
 $('r-w').onchange = (e) => {
@@ -418,6 +568,9 @@ for (const btn of document.querySelectorAll('[data-decor]')) {
 }
 $('d-len').oninput = (e) => { if (selected?.type === 'decor') { def.decor[selected.i].len = +e.target.value || 20; scheduleRebuild(); } };
 $('d-h').oninput = (e) => { if (selected?.type === 'decor') { def.decor[selected.i].h = +e.target.value || 5; scheduleRebuild(); } };
+$('d-dep').oninput = (e) => { if (selected?.type === 'decor') { def.decor[selected.i].dep = +e.target.value || 26; scheduleRebuild(); } };
+$('d-floors').oninput = (e) => { if (selected?.type === 'decor') { def.decor[selected.i].floors = Math.max(1, Math.round(+e.target.value || 8)); scheduleRebuild(); } };
+$('d-neon').onchange = (e) => { if (selected?.type === 'decor') { def.decor[selected.i].neon = +e.target.value; scheduleRebuild(); } };
 $('d-dir-mode').onchange = (e) => {
   if (selected?.type !== 'decor') return;
   const d = def.decor[selected.i];
@@ -426,6 +579,7 @@ $('d-dir-mode').onchange = (e) => {
 };
 $('d-dir').oninput = (e) => { if (selected?.type === 'decor') { def.decor[selected.i].dir = +e.target.value || 0; scheduleRebuild(); } };
 $('d-delete').onclick = deleteSelected;
+$('d-dup').onclick = () => { copySelected(); pasteClipboard(); };
 
 $('r-add').onclick = () => {
   placingRamp = true;

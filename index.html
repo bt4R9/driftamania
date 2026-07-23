@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Driftamania</title>
+  <style>
+    :root {
+      --bg: #05060a;
+      --panel: rgba(10, 12, 20, 0.88);
+      --border: #1d2334;
+      --cyan: #22e6ff;
+      --magenta: #ff2d9a;
+      --lime: #b6ff3d;
+      --text: #e8eaf0;
+      --muted: #7d86a0;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: var(--bg); }
+    body { font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; color: var(--text); }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    .overlay {
+      position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      z-index: 20;
+    }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      padding: 32px 36px; width: min(440px, 92vw); text-align: center;
+      box-shadow: 0 0 60px rgba(34, 230, 255, 0.07), 0 24px 80px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+    }
+    h1 {
+      font-size: 34px; letter-spacing: 7px; font-weight: 800; font-style: italic;
+      background: linear-gradient(90deg, var(--cyan), var(--magenta));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      margin-bottom: 4px;
+    }
+    .sub { color: var(--muted); font-size: 12px; letter-spacing: 3px; margin-bottom: 24px; }
+    label { display: block; text-align: left; font-size: 10px; letter-spacing: 2px; color: var(--muted); margin: 14px 0 5px; }
+    input {
+      width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+      background: #070910; color: var(--text); font-size: 15px; outline: none;
+    }
+    input:focus { border-color: var(--cyan); box-shadow: 0 0 12px rgba(34, 230, 255, 0.25); }
+    #room-input { text-transform: uppercase; letter-spacing: 5px; font-weight: 700; }
+    .btn {
+      display: block; width: 100%; margin-top: 12px; padding: 12px; border: 1px solid transparent;
+      border-radius: 8px; font-size: 13px; font-weight: 700; letter-spacing: 2px; cursor: pointer;
+      background: #171d2c; color: var(--text); transition: filter .12s, transform .06s, box-shadow .12s;
+    }
+    .btn:hover { filter: brightness(1.3); }
+    .btn:active { transform: scale(0.98); }
+    .btn.cyan { background: linear-gradient(90deg, #0e6d7a, #0a4c66); border-color: var(--cyan); color: #d9fbff; }
+    .btn.cyan:hover { box-shadow: 0 0 18px rgba(34, 230, 255, 0.35); }
+    .btn.magenta { background: linear-gradient(90deg, #6d0e44, #4c0a30); border-color: var(--magenta); color: #ffd9ec; }
+    .btn.magenta:hover { box-shadow: 0 0 18px rgba(255, 45, 154, 0.35); }
+    .row { display: flex; gap: 10px; }
+    .row .btn { flex: 1; }
+    .or-divider {
+      display: flex; align-items: center; gap: 12px; margin: 18px 0 4px;
+      color: var(--muted); font-size: 10px; letter-spacing: 2px;
+    }
+    .or-divider::before, .or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .join-row { align-items: stretch; }
+    .join-row input { flex: 1; width: auto; margin-top: 12px; }
+    .join-row .btn { flex: 0 0 auto; width: auto; padding: 12px 26px; }
+    .btn .blurb { display: block; margin-top: 3px; font-size: 9.5px; font-weight: 400; letter-spacing: 1.5px; opacity: .65; }
+    .hint { margin-top: 18px; font-size: 11px; color: var(--muted); line-height: 1.7; }
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; box-shadow: 0 0 8px currentColor; }
+
+    /* ---------- Loading (builds the city behind a progress bar) ---------- */
+    #loading {
+      display: flex; z-index: 30; transition: opacity .4s ease;
+      background: radial-gradient(ellipse at 50% 25%, rgba(34,230,255,0.08), transparent 60%), var(--bg);
+    }
+    #loading .card { background: transparent; border: none; box-shadow: none; }
+    #loading-track {
+      width: 100%; height: 6px; margin-top: 28px; border-radius: 4px;
+      background: #0b0e18; border: 1px solid var(--border); overflow: hidden;
+    }
+    #loading-bar {
+      width: 0%; height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, var(--cyan), var(--magenta));
+      box-shadow: 0 0 14px rgba(34,230,255,0.55); transition: width .25s ease;
+    }
+    #loading-label { margin: 14px 0 0; min-height: 15px; }
+
+    /* ---------- Splash gate (audio needs a real click) ---------- */
+    #splash { display: flex; background: radial-gradient(ellipse at 50% 25%, rgba(34,230,255,0.08), transparent 60%); }
+    #splash .card { background: transparent; border: none; box-shadow: none; }
+    #btn-start-game { margin-top: 30px; padding: 18px 60px; font-size: 18px; letter-spacing: 6px; animation: splash-pulse 1.6s ease-in-out infinite; }
+    @keyframes splash-pulse { 50% { box-shadow: 0 0 34px rgba(34,230,255,0.55); } }
+
+    /* ---------- Menu ---------- */
+    #menu { background: radial-gradient(ellipse at 50% 25%, rgba(34,230,255,0.06), transparent 60%); }
+
+    /* ---------- Lobby ---------- */
+    #lobby .card { width: min(680px, 94vw); }
+    #lobby-title { font-size: 22px; letter-spacing: 5px; font-weight: 800; margin-bottom: 4px; color: var(--cyan); text-shadow: 0 0 20px rgba(34,230,255,.5); }
+    #lobby-players { margin: 14px 0; text-align: left; }
+    #lobby-players .player { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 14px; letter-spacing: 1px; }
+    #lobby-players .tag { color: var(--muted); font-size: 10px; letter-spacing: 2px; margin-left: 6px; }
+    #lobby-tracks { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 200px)); justify-content: center; gap: 8px; margin-top: 6px; }
+    #lobby-tracks button {
+      padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border);
+      background: #0b0e18; color: var(--text); font-size: 11px; font-weight: 700; letter-spacing: 1px;
+      cursor: pointer; line-height: 1.5;
+    }
+    #lobby-tracks button span { display: block; color: var(--muted); font-weight: 400; font-size: 9.5px; }
+    #lobby-tracks .track-preview { display: block; width: 100%; height: auto; margin-bottom: 6px; }
+    #lobby-tracks button.selected { border-color: var(--cyan); box-shadow: 0 0 14px rgba(34,230,255,.25); color: var(--cyan); }
+    #lobby-tracks button:disabled { cursor: default; opacity: .75; }
+    #lobby-status { margin-top: 12px; font-size: 11px; color: var(--muted); letter-spacing: 1px; min-height: 15px; }
+
+    /* ---------- Results ---------- */
+    #results .card { transition: opacity .7s; }
+    #results.cinema .card { opacity: 0.3; }
+    #results.cinema .card:hover { opacity: 1; }
+    #results .card { width: min(480px, 94vw); }
+    #results-list { margin: 16px 0; text-align: left; }
+    #results-list .entry {
+      display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px;
+      border-bottom: 1px solid var(--border); font-size: 14px; font-variant-numeric: tabular-nums;
+    }
+    #results-list .entry.self { color: var(--lime); }
+    #results-list .best { color: var(--muted); font-size: 11px; }
+    #results-status { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin-top: 10px; }
+
+    /* ---------- HUD ---------- */
+    #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; display: none; }
+    .hud-panel {
+      position: absolute; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 14px;
+    }
+    #hud-speed { left: 20px; bottom: 20px; text-align: right; min-width: 130px; }
+    #hud-speed .big { font-size: 40px; font-weight: 800; font-style: italic; line-height: 1; color: var(--cyan); text-shadow: 0 0 16px rgba(34,230,255,.45); }
+    #hud-speed .unit { font-size: 10px; color: var(--muted); letter-spacing: 3px; }
+    #hud-lap { left: 20px; top: 20px; font-size: 13px; letter-spacing: 1px; }
+    #hud-lap .pos { color: var(--magenta); font-weight: 800; font-size: 18px; margin-right: 8px; text-shadow: 0 0 14px rgba(255,45,154,.5); }
+    #hud-lap .time { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 20px; }
+    #hud-lap .best { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    #hud-board { right: 20px; top: 20px; min-width: 200px; font-size: 12.5px; }
+    #hud-board .title { font-size: 9px; letter-spacing: 3px; color: var(--muted); margin-bottom: 6px; }
+    #hud-board .entry { display: flex; justify-content: space-between; gap: 12px; padding: 2.5px 0; font-variant-numeric: tabular-nums; }
+    #hud-board .entry.self { color: var(--lime); }
+    #minimap {
+      position: absolute; right: 20px; bottom: 20px; width: 172px; height: 172px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    }
+    #hud-room { display: none; right: 20px; bottom: 45%; font-size: 11px; color: var(--muted); pointer-events: auto; cursor: pointer; letter-spacing: 1px; }   /* hidden until setRoomLabel gives it content (dev test-drive's BACK TO EDITOR link) — an empty .hud-panel otherwise renders as a bare black box */
+    #hud-room b { color: var(--cyan); letter-spacing: 4px; font-size: 15px; }
+    #hud-score { left: 50%; top: 20px; transform: translateX(-50%); text-align: center; min-width: 130px; }
+    #hud-score .title { font-size: 9px; letter-spacing: 3px; color: var(--muted); }
+    #hud-score .num { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--lime); text-shadow: 0 0 14px rgba(182,255,61,.4); }
+    #hud-chain {
+      position: absolute; left: 50%; bottom: 138px; transform: translateX(-50%);
+      font-size: 22px; font-weight: 800; font-style: italic; letter-spacing: 2px;
+      opacity: 0; white-space: nowrap; text-shadow: 0 0 18px currentColor;
+    }
+    #hud-drift {
+      position: absolute; left: 50%; bottom: 92px; transform: translateX(-50%) rotate(-4deg);
+      font-size: 28px; font-weight: 800; font-style: italic; letter-spacing: 4px;
+      color: var(--magenta); opacity: 0; transition: opacity .12s;
+      text-shadow: 0 0 24px rgba(255, 45, 154, 0.8);
+    }
+    #hud-msg {
+      position: absolute; left: 50%; top: 16%; transform: translateX(-50%);
+      font-size: 56px; font-weight: 800; font-style: italic; letter-spacing: 4px; text-align: center;
+      text-shadow: 0 0 30px currentColor; opacity: 0; transition: opacity .2s; white-space: nowrap;
+    }
+    #hud-help { left: 50%; bottom: 20px; transform: translateX(-50%); font-size: 10px; color: var(--muted); letter-spacing: 1px; white-space: nowrap; }
+  </style>
+  <script type="module" crossorigin src="./assets/main-C9-umnMF.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud">
+    <!-- speedometer, minimap, standings/laps board are 3D-rendered by the engine (hud3d.js) -->
+    <div id="hud-room" class="hud-panel" title="Click to copy room code"></div>
+    <div id="hud-msg"></div>
+  </div>
+
+  <div id="loading" class="overlay">
+    <div class="card">
+      <h1>DRIFTAMANIA</h1>
+      <div class="sub">NEON CITY</div>
+      <div id="loading-track"><div id="loading-bar"></div></div>
+      <div id="loading-label" class="sub">loading…</div>
+    </div>
+  </div>
+
+  <div id="splash" class="overlay">
+    <div class="card">
+      <h1>DRIFTAMANIA</h1>
+      <div class="sub">NEON CITY</div>
+      <button class="btn cyan" id="btn-start-game">START</button>
+    </div>
+  </div>
+
+  <div id="menu" class="overlay">
+    <div class="card">
+      <h1>DRIFTAMANIA</h1>
+      <div class="sub">NEON CITY</div>
+      <div id="menu-home">
+        <label for="name-input">DRIVER NAME</label>
+        <input id="name-input" maxlength="12" placeholder="PLAYER" autocomplete="off" />
+        <button class="btn cyan" id="btn-solo">SINGLE PLAYER<span class="blurb">CRUISE NEON CITY OR RACE 3 AI DRIVERS</span></button>
+        <button class="btn magenta" id="btn-multi">MULTIPLAYER<span class="blurb">RACE UP TO 4 PLAYERS ONLINE</span></button>
+      </div>
+      <div id="menu-sp" style="display:none">
+        <button class="btn cyan" id="btn-sp-free">FREE ROAM<span class="blurb">NO LAPS, NO RIVALS — JUST YOU AND THE CITY</span></button>
+        <button class="btn magenta" id="btn-sp-race">RACE VS AI<span class="blurb">3 LAPS AGAINST 3 AI DRIVERS</span></button>
+        <button class="btn" id="btn-sp-back">← BACK</button>
+      </div>
+      <div id="menu-mp" style="display:none">
+        <div class="sub" style="margin-bottom:8px">OPEN LOBBIES</div>
+        <div id="lobby-list"><div class="hint">loading…</div></div>
+        <button class="btn cyan" id="btn-create">CREATE LOBBY<span class="blurb">START A NEW ROOM AND WAIT FOR RACERS</span></button>
+        <div class="row">
+          <button class="btn" id="btn-refresh">↻ REFRESH</button>
+          <button class="btn" id="btn-menu-back">← BACK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="lobby" class="overlay">
+    <div class="card">
+      <div id="lobby-title"></div>
+      <div class="sub">STARTING GRID</div>
+      <div id="lobby-players"></div>
+      <div id="ai-row" class="row" style="display:none; align-items:center; gap:10px">
+        <span class="hint" style="margin:0">AI DRIVERS</span>
+        <button class="btn" id="btn-ai-minus" style="min-width:36px">−</button>
+        <span id="ai-count" style="min-width:20px; text-align:center">0</span>
+        <button class="btn" id="btn-ai-plus" style="min-width:36px">+</button>
+      </div>
+      <button class="btn cyan" id="btn-start-race">START RACE · 3 LAPS</button>
+      <button class="btn magenta" id="btn-ready" style="display:none">✓ READY</button>
+      <div id="lobby-status"></div>
+      <button class="btn" id="btn-leave">LEAVE</button>
+    </div>
+  </div>
+
+  <div id="results" class="overlay">
+    <div class="card">
+      <h1 style="font-size:26px">RESULTS</h1>
+      <div id="results-list"></div>
+      <button class="btn cyan" id="btn-rematch">REMATCH</button>
+      <button class="btn" id="btn-results-menu">LOBBY / MENU</button>
+      <div id="results-status"></div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,50 @@
+{
+  "menu": [
+    "menu1.m4a",
+    "menu2.m4a"
+  ],
+  "race": [
+    {
+      "artist": "Static-X",
+      "song": "The Only",
+      "file": "race1.m4a"
+    },
+    {
+      "artist": "Andy Hunter",
+      "song": "The Wonders of You",
+      "file": "race2.m4a"
+    },
+    {
+      "artist": "Ludacris",
+      "song": "Act a Fool",
+      "file": "race3.m4a"
+    },
+    {
+      "artist": "Overseer",
+      "song": "Supermoves",
+      "file": "race4.m4a"
+    },
+    {
+      "artist": "FC Kahuna",
+      "song": "Glitterball",
+      "file": "race5.m4a"
+    },
+    {
+      "artist": "Element Eighty",
+      "song": "Broken Promises",
+      "file": "race6.m4a"
+    },
+    {
+      "artist": "Overseer",
+      "song": "Doomsday",
+      "file": "race7.m4a"
+    },
+    {
+      "artist": "Static-X",
+      "song": "Skinnyman",
+      "file": "race8.m4a"
+    }
+  ],
+  "raceCooldown": 6,
+  "menuCooldown": 3
+}
